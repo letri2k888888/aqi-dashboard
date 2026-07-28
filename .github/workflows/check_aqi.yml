@@ -32,7 +32,6 @@ jobs:
           AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           AQI_CITY: ${{ vars.AQI_CITY }}
-          DISCORD_MENTION_USER_IDS: ${{ vars.DISCORD_MENTION_USER_IDS }}
         run: python check_aqi.py
 
       - name: Commit lại lịch sử AQI (nếu có thay đổi)

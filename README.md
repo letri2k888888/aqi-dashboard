@@ -62,15 +62,10 @@ Sau đó vào repo trên GitHub:
    - `DISCORD_WEBHOOK` = URL webhook ở bước 2
 2. (Tuỳ chọn) Nếu muốn đổi thành phố khác Hà Nội: tạo thêm **Repository variable**
    tên `AQI_CITY` (ví dụ `ho-chi-minh-city`) trong tab **Variables** cùng trang.
-2b. Để thêm người nhận thông báo (mỗi người sẽ bị @mention trong tin cảnh báo,
-   giúp Discord đẩy push notification ra màn hình): tạo **Repository variable**
-   tên `DISCORD_MENTION_USER_IDS`, giá trị là danh sách Discord User ID cách
-   nhau bằng dấu phẩy, ví dụ `945622381915951104,111222333444555666`.
-   - Cách lấy Discord User ID: User Settings > Advanced > bật **Developer Mode**,
-     sau đó chuột phải vào tên người dùng > **Copy User ID**.
-   - Người mới muốn nhận thông báo chỉ cần gửi ID cho bạn để thêm vào biến
-     này — không cần sửa code, không cần tạo webhook riêng.
-3. Workflow `.github/workflows/check_aqi.yml` sẽ tự chạy mỗi 30 phút (cron UTC),
+3. Tin cảnh báo luôn `@everyone` (ping toàn bộ thành viên server, kể cả offline)
+   để Discord đẩy push notification ra màn hình — ai vào server Discord chứa
+   webhook là tự động nhận thông báo, không cần khai báo gì thêm.
+4. Workflow `.github/workflows/check_aqi.yml` sẽ tự chạy mỗi 30 phút (cron UTC),
    kể cả khi máy cá nhân tắt. Có thể bấm chạy thử ngay qua tab **Actions >
    Kiểm tra AQI định kỳ > Run workflow**.
 4. Sau mỗi lần chạy, workflow tự commit lại `db/aqi_history.db` vào repo để giữ
