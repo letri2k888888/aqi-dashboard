@@ -1,0 +1,43 @@
+name: Kiểm tra AQI định kỳ
+
+# Chạy tự động mỗi 30 phút (cron dùng giờ UTC), kể cả khi máy cá nhân tắt.
+# Có thể chạy thủ công qua tab Actions > Run workflow (workflow_dispatch).
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+# Cần quyền ghi để workflow có thể commit ngược file SQLite (db/aqi_history.db)
+# chứa lịch sử AQI — vì GitHub Actions runner không giữ state giữa các lần chạy.
+permissions:
+  contents: write
+
+jobs:
+  check-aqi:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cài đặt Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cài đặt thư viện phụ thuộc
+        run: pip install -r requirements.txt
+
+      - name: Chạy script kiểm tra AQI
+        env:
+          AQICN_TOKEN: ${{ secrets.AQICN_TOKEN }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          AQI_CITY: ${{ vars.AQI_CITY }}
+        run: python check_aqi.py
+
+      - name: Commit lại lịch sử AQI (nếu có thay đổi)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add db/aqi_history.db
+          git diff --cached --quiet || git commit -m "chore: cập nhật lịch sử AQI [skip ci]"
+          git push
