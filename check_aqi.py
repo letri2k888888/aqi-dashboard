@@ -14,7 +14,12 @@ Biến môi trường bắt buộc:
   - DISCORD_WEBHOOK : URL webhook của kênh Discord muốn nhận cảnh báo
 
 Biến môi trường tuỳ chọn:
-  - AQI_CITY        : tên thành phố/trạm AQICN, mặc định "hanoi"
+  - AQI_CITY                 : tên thành phố/trạm AQICN, mặc định "hanoi"
+  - DISCORD_MENTION_USER_IDS : danh sách Discord User ID cách nhau bằng dấu
+                               phẩy, mỗi ID sẽ bị @mention trong tin cảnh báo
+                               (để Discord đẩy push notification ra màn hình).
+                               Ai muốn nhận thông báo chỉ cần được thêm ID vào
+                               đây — không cần sửa code.
 """
 
 import os
@@ -26,10 +31,19 @@ from aqi_common import CITY, LEVEL_COLORS, classify_aqi, get_db_connection, get_
 
 AQICN_API_URL = "https://api.waqi.info/feed/{city}/?token={token}"
 
-# Discord User ID để @mention trong tin nhắn cảnh báo — bắt buộc phải mention
-# thì Discord mới đẩy push notification (banner/lock screen) trên điện thoại,
-# nếu không tin nhắn webhook thường chỉ hiện badge, không bật thông báo ra ngoài.
-DISCORD_MENTION_USER_ID = "945622381915951104"
+# ID mặc định dùng khi chưa cấu hình DISCORD_MENTION_USER_IDS (ví dụ chạy local).
+_DEFAULT_MENTION_USER_IDS = "945622381915951104"
+
+
+def get_mention_user_ids() -> list:
+    """Đọc danh sách Discord User ID cần @mention từ biến môi trường.
+
+    Dùng "or" thay vì giá trị mặc định của .get(): trên GitHub Actions, biến
+    env luôn tồn tại (dù rỗng) khi repo chưa cấu hình vars tương ứng, nên
+    os.environ.get(key, default) sẽ trả về "" thay vì giá trị mặc định.
+    """
+    raw = os.environ.get("DISCORD_MENTION_USER_IDS") or _DEFAULT_MENTION_USER_IDS
+    return [uid.strip() for uid in raw.split(",") if uid.strip()]
 
 
 def fetch_current_aqi(city: str, token: str) -> int:
@@ -64,16 +78,18 @@ def send_discord_alert(webhook_url: str, old_aqi: int, old_level: str, new_aqi: 
         ),
         "color": int(LEVEL_COLORS.get(new_level, "#808080").lstrip("#"), 16),
     }
+    mention_ids = get_mention_user_ids()
+    mentions_text = " ".join(f"<@{uid}>" for uid in mention_ids)
     payload = {
         # Push notification trên điện thoại chỉ hiện được nội dung của "content",
         # KHÔNG hiện nội dung bên trong "embeds" -> phải nhét luôn thông tin tóm
         # tắt (AQI cũ->mới, ngưỡng cũ->mới) vào đây, không chỉ mỗi mention.
         "content": (
-            f"<@{DISCORD_MENTION_USER_ID}> ⚠️ AQI {city.title()} đổi mức: "
+            f"{mentions_text} ⚠️ AQI {city.title()} đổi mức: "
             f"{old_level} ({old_aqi}) → {new_level} ({new_aqi})"
         ),
         "embeds": [embed],
-        "allowed_mentions": {"users": [DISCORD_MENTION_USER_ID]},
+        "allowed_mentions": {"users": mention_ids},
     }
 
     response = requests.post(webhook_url, json=payload, timeout=15)
