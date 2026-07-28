@@ -18,7 +18,10 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "aqi_hi
 
 # Thành phố / trạm quan trắc trên AQICN (https://aqicn.org/city/<ten-thanh-pho>)
 # Có thể override bằng biến môi trường AQI_CITY, mặc định là Hà Nội.
-CITY = os.environ.get("AQI_CITY", "hanoi")
+# Dùng "or" thay vì giá trị mặc định của .get(): trên GitHub Actions, biến
+# env luôn tồn tại (dù rỗng) khi repo chưa cấu hình vars.AQI_CITY, nên
+# os.environ.get("AQI_CITY", "hanoi") sẽ trả về "" thay vì "hanoi".
+CITY = os.environ.get("AQI_CITY") or "hanoi"
 
 # Ngưỡng phân loại AQI theo chuẩn EPA (Air Quality Index) — dùng breakpoint
 # thấp nhất của mỗi khoảng để so sánh dạng "aqi >= threshold".
