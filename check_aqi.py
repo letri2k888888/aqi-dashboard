@@ -26,6 +26,11 @@ from aqi_common import CITY, LEVEL_COLORS, classify_aqi, get_db_connection, get_
 
 AQICN_API_URL = "https://api.waqi.info/feed/{city}/?token={token}"
 
+# Discord User ID để @mention trong tin nhắn cảnh báo — bắt buộc phải mention
+# thì Discord mới đẩy push notification (banner/lock screen) trên điện thoại,
+# nếu không tin nhắn webhook thường chỉ hiện badge, không bật thông báo ra ngoài.
+DISCORD_MENTION_USER_ID = "945622381915951104"
+
 
 def fetch_current_aqi(city: str, token: str) -> int:
     """Gọi AQICN API và trả về giá trị AQI hiện tại (số nguyên).
@@ -59,7 +64,17 @@ def send_discord_alert(webhook_url: str, old_aqi: int, old_level: str, new_aqi: 
         ),
         "color": int(LEVEL_COLORS.get(new_level, "#808080").lstrip("#"), 16),
     }
-    payload = {"embeds": [embed]}
+    payload = {
+        # Push notification trên điện thoại chỉ hiện được nội dung của "content",
+        # KHÔNG hiện nội dung bên trong "embeds" -> phải nhét luôn thông tin tóm
+        # tắt (AQI cũ->mới, ngưỡng cũ->mới) vào đây, không chỉ mỗi mention.
+        "content": (
+            f"<@{DISCORD_MENTION_USER_ID}> ⚠️ AQI {city.title()} đổi mức: "
+            f"{old_level} ({old_aqi}) → {new_level} ({new_aqi})"
+        ),
+        "embeds": [embed],
+        "allowed_mentions": {"users": [DISCORD_MENTION_USER_ID]},
+    }
 
     response = requests.post(webhook_url, json=payload, timeout=15)
     response.raise_for_status()
