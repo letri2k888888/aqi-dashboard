@@ -1,6 +1,8 @@
 name: Kiểm tra AQI định kỳ
 
 # Chạy tự động mỗi 30 phút (cron dùng giờ UTC), kể cả khi máy cá nhân tắt.
+# check_aqi.py tự xác định mốc 6h/12h/18h theo GIỜ VIỆT NAM (Asia/Ho_Chi_Minh)
+# để gửi báo cáo định kỳ, nên không cần đổi lịch cron này theo múi giờ.
 # Có thể chạy thủ công qua tab Actions > Run workflow (workflow_dispatch).
 on:
   schedule:

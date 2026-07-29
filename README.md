@@ -72,12 +72,21 @@ Sau đó vào repo trên GitHub:
    lịch sử — vì vậy nhớ `git pull` trước khi chạy dashboard local để có dữ liệu
    mới nhất từ Actions.
 
-## Logic chống spam Discord
+## Logic gửi thông báo Discord
 
-Mỗi lần chạy, script lưu 1 bản ghi AQI mới vào SQLite. Nó chỉ gửi Discord khi
-**ngưỡng (level)** của lần chạy hiện tại khác với ngưỡng của bản ghi **ngay
-trước đó** — nếu AQI dao động nhưng vẫn nằm trong cùng một ngưỡng (ví dụ 60 →
-75, đều là "Moderate"), sẽ không có thông báo nào được gửi.
+Mỗi lần chạy (mỗi 30 phút), script lưu 1 bản ghi AQI mới vào SQLite, sau đó
+gửi Discord trong 2 trường hợp (ưu tiên theo thứ tự, không gửi trùng lặp):
+
+1. **Đổi ngưỡng** — nếu **ngưỡng (level)** của lần chạy hiện tại khác với
+   ngưỡng của bản ghi **ngay trước đó**, luôn gửi cảnh báo, bất kể giờ giấc.
+   Nếu AQI dao động nhưng vẫn nằm trong cùng một ngưỡng (ví dụ 60 → 75, đều
+   là "Moderate"), sẽ không có thông báo nào được gửi ở bước này.
+2. **Báo cáo định kỳ** — nếu ngưỡng không đổi, nhưng thời điểm hiện tại (giờ
+   Việt Nam) đang trong khung 30 phút đầu của mốc **6h / 12h / 18h**, vẫn gửi
+   1 báo cáo hiện trạng AQI để có cập nhật đều đặn trong ngày dù không có
+   biến động.
+
+Ngoài 2 trường hợp trên, script không gửi gì cả, tránh spam kênh Discord.
 
 ## Ngưỡng phân loại AQI (chuẩn EPA)
 
