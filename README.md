@@ -137,3 +137,42 @@ Ngoài 2 trường hợp trên, script không gửi gì cả, tránh spam kênh 
 | 151-200 | Unhealthy |
 | 201-300 | Very Unhealthy |
 | 301-500 | Hazardous |
+
+## Câu hỏi thường gặp (về vai trò của dashboard)
+
+**Dashboard này để làm gì trong hệ thống?**
+Là công cụ trực quan hoá lịch sử AQI đã thu thập (biểu đồ xu hướng, mức hiện
+tại, bảng ngưỡng EPA), phục vụ theo dõi/phân tích. Kênh cảnh báo chính vẫn là
+Discord — dashboard không thay thế vai trò đó.
+
+**Sao không tích hợp cảnh báo luôn vào dashboard, đỡ cần Discord?**
+Vì cảnh báo cần chủ động đẩy tin đến người dùng ngay khi có thay đổi (push
+notification), kể cả khi không mở máy. Dashboard là bị động — phải tự mở mới
+xem được, không phù hợp cho việc báo real-time.
+
+**Sao chạy local mà không deploy public?**
+Phạm vi là dự án cá nhân, mục tiêu là minh hoạ khả năng lưu trữ + trực quan
+hoá dữ liệu, không cần phục vụ nhiều người dùng đồng thời. Deploy public
+(Streamlit Cloud) là mở rộng có thể làm thêm, không bắt buộc cho lõi hệ thống.
+
+**Dashboard lấy dữ liệu từ đâu, có tự động cập nhật không?**
+Đọc trực tiếp từ file SQLite (`db/aqi_history.db`) do `check_aqi.py` ghi qua
+GitHub Actions mỗi 30 phút. Dashboard chỉ đọc, không tự gọi API AQICN — có
+cache 60 giây và nút "Làm mới" để đọc lại dữ liệu file.
+
+**Sao dùng SQLite mà không dùng database khác?**
+Quy mô dữ liệu nhỏ (1 giá trị/30 phút, 1 thành phố), không cần server
+database riêng — SQLite là file đơn giản, đủ dùng, dễ triển khai và commit
+ngược vào Git để giữ lịch sử qua GitHub Actions.
+
+**Sao chọn Streamlit thay vì Flask/Django/React?**
+Streamlit cho phép dựng giao diện trực quan nhanh bằng thuần Python, phù hợp
+thời gian làm báo cáo cá nhân ngắn, không cần viết riêng HTML/CSS/JS.
+
+**API key và Discord webhook được bảo vệ thế nào?**
+Lưu trong biến môi trường/GitHub Secrets, không hard-code trong code; `.env`
+bị `.gitignore` nên không lộ khi push lên GitHub.
+
+**Có nhiều người mở dashboard cùng lúc bị lỗi không?**
+Không, vì dashboard chỉ đọc (read-only) từ SQLite, không có thao tác ghi
+đồng thời nên không xung đột.
