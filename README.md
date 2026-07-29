@@ -72,6 +72,45 @@ Sau đó vào repo trên GitHub:
    lịch sử — vì vậy nhớ `git pull` trước khi chạy dashboard local để có dữ liệu
    mới nhất từ Actions.
 
+## Kích hoạt đúng giờ đáng tin cậy hơn (khuyến nghị)
+
+**Vấn đề:** lịch `schedule` của GitHub Actions (free tier) **không đảm bảo
+chạy đúng giờ** — có thể trễ vài chục phút đến vài tiếng khi hệ thống GitHub
+tải cao, đặc biệt với repo ít hoạt động. Đây là giới hạn hạ tầng, không phải
+lỗi code.
+
+**Giải pháp:** dùng 1 dịch vụ cron miễn phí ở ngoài (ví dụ
+[cron-job.org](https://cron-job.org)) gọi thẳng GitHub REST API để kích hoạt
+workflow đúng lịch, thay vì phụ thuộc `schedule:` nội bộ của GitHub. Workflow
+hiện tại **không cần sửa gì** vì đã có sẵn `workflow_dispatch`.
+
+Các bước tự thực hiện (không thể làm thay vì cần đăng nhập tài khoản cá nhân):
+
+1. Tạo GitHub token phạm vi hẹp: **github.com/settings/personal-access-tokens**
+   > **Fine-grained tokens > Generate new token**
+   - **Repository access**: chỉ chọn repo `aqi-dashboard` (không chọn "All repositories")
+   - **Permissions > Actions**: chọn **Read and write**
+   - Generate, rồi copy token (chỉ hiện 1 lần) — token này càng hẹp quyền
+     càng an toàn vì sẽ được lưu ở dịch vụ bên thứ ba.
+2. Đăng ký tài khoản miễn phí tại [cron-job.org](https://cron-job.org).
+3. Tạo cronjob mới với cấu hình:
+   - **URL**:
+     `https://api.github.com/repos/letri2k888888/aqi-dashboard/actions/workflows/check_aqi.yml/dispatches`
+   - **Method**: `POST`
+   - **Headers**:
+     - `Authorization: Bearer <token bước 1>`
+     - `Accept: application/vnd.github+json`
+     - `Content-Type: application/json`
+   - **Body**: `{"ref":"main"}`
+   - **Schedule**: mỗi 30 phút (cron-job.org kích hoạt đúng giờ, không bị trễ
+     như GitHub free tier).
+4. Lưu ý bảo mật: không chia sẻ token này, và nếu ngừng dùng cron-job.org thì
+   vào lại trang token ở bước 1 để **Revoke**.
+
+Có thể giữ nguyên `schedule:` trong workflow làm phương án dự phòng miễn phí —
+2 cơ chế không xung đột, chỉ khiến có thêm vài lần chạy dư (vô hại vì logic
+thông báo đã tự chống trùng lặp).
+
 ## Logic gửi thông báo Discord
 
 Mỗi lần chạy (mỗi 30 phút), script lưu 1 bản ghi AQI mới vào SQLite, sau đó
