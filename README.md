@@ -127,6 +127,17 @@ gửi Discord trong 2 trường hợp (ưu tiên theo thứ tự, không gửi t
 
 Ngoài 2 trường hợp trên, script không gửi gì cả, tránh spam kênh Discord.
 
+### Dự báo AQI ngày mai (21h hằng ngày)
+
+Tách biệt hoàn toàn với logic chống spam ở trên (không tranh chấp, không thay
+thế): vào khung 30 phút đầu của **21h giờ Việt Nam** mỗi ngày, script gọi thêm
+dữ liệu dự báo PM2.5/PM10 của AQICN cho ngày mai, tự quy đổi sang thang AQI
+bằng công thức breakpoint chuẩn EPA (hàm `forecast_pm_to_aqi` trong
+`aqi_common.py`), rồi gửi 1 tin dự báo riêng. Nếu đúng lúc 21h mà AQI cũng vừa
+đổi ngưỡng, cả 2 tin (cảnh báo đổi ngưỡng + dự báo ngày mai) đều được gửi vì
+chúng mang thông tin khác nhau (hiện tại vs. tương lai) — đây là chủ đích,
+không phải lỗi trùng lặp.
+
 ## Ngưỡng phân loại AQI (chuẩn EPA)
 
 | Khoảng AQI | Mức |

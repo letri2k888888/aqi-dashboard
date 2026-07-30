@@ -13,6 +13,9 @@ Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để:
         đặn trong ngày dù AQI không biến động.
      Ngoài 2 trường hợp trên (không đổi ngưỡng và không phải giờ báo cáo) ->
      không gửi gì cả, tránh spam kênh Discord.
+  5. Riêng biệt, KHÔNG ảnh hưởng tới logic ở bước 4: vào 21h hằng ngày (giờ
+     Việt Nam), gửi thêm 1 tin dự báo AQI cho ngày mai (ước tính từ dữ liệu
+     dự báo PM2.5/PM10 của AQICN), giúp người dùng chuẩn bị trước.
 
 Biến môi trường bắt buộc:
   - AQICN_TOKEN     : API token lấy tại https://aqicn.org/data-platform/token/
@@ -24,12 +27,20 @@ Biến môi trường tuỳ chọn:
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
 
-from aqi_common import CITY, LEVEL_COLORS, classify_aqi, get_db_connection, get_last_record, insert_record
+from aqi_common import (
+    CITY,
+    LEVEL_COLORS,
+    classify_aqi,
+    forecast_pm_to_aqi,
+    get_db_connection,
+    get_last_record,
+    insert_record,
+)
 
 AQICN_API_URL = "https://api.waqi.info/feed/{city}/?token={token}"
 
@@ -37,6 +48,11 @@ AQICN_API_URL = "https://api.waqi.info/feed/{city}/?token={token}"
 # địa phương, bất kể GitHub Actions runner chạy ở giờ UTC nào.
 VN_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 SCHEDULED_REPORT_HOURS = {6, 12, 18}
+
+# Mốc giờ gửi dự báo AQI ngày mai — tách riêng khỏi SCHEDULED_REPORT_HOURS vì
+# đây là 1 loại tin nhắn khác (dự báo tương lai, không phải hiện trạng), chạy
+# độc lập, không ảnh hưởng tới logic ưu tiên đổi ngưỡng / báo cáo định kỳ.
+FORECAST_HOUR = 21
 
 
 def is_scheduled_report_window(now: datetime | None = None) -> bool:
@@ -46,6 +62,13 @@ def is_scheduled_report_window(now: datetime | None = None) -> bool:
     """
     now_vn = (now or datetime.now(VN_TIMEZONE)).astimezone(VN_TIMEZONE)
     return now_vn.hour in SCHEDULED_REPORT_HOURS and now_vn.minute < 30
+
+
+def is_forecast_window(now: datetime | None = None) -> bool:
+    """True nếu thời điểm hiện tại (giờ VN) nằm trong 30 phút đầu của mốc 21h
+    — thời điểm gửi dự báo AQI ngày mai. Độc lập với is_scheduled_report_window."""
+    now_vn = (now or datetime.now(VN_TIMEZONE)).astimezone(VN_TIMEZONE)
+    return now_vn.hour == FORECAST_HOUR and now_vn.minute < 30
 
 
 def fetch_current_aqi(city: str, token: str) -> int:
@@ -67,6 +90,55 @@ def fetch_current_aqi(city: str, token: str) -> int:
         raise RuntimeError(f"Giá trị AQI không hợp lệ (trạm có thể đang offline): {aqi_value}")
 
     return aqi_value
+
+
+def fetch_tomorrow_forecast_aqi(city: str, token: str):
+    """Gọi AQICN API, lấy dữ liệu dự báo PM2.5/PM10 cho NGÀY MAI (giờ VN) và
+    quy đổi sang AQI. Trả về None nếu trạm không có dữ liệu dự báo cho ngày mai.
+
+    Đây là API call RIÊNG, tách biệt hoàn toàn với fetch_current_aqi() ở trên
+    — không sửa hay dùng chung logic với hàm đó, đảm bảo không ảnh hưởng tới
+    luồng xử lý AQI hiện tại đã có.
+    """
+    url = AQICN_API_URL.format(city=city, token=token)
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
+    data = response.json()
+
+    if data.get("status") != "ok":
+        raise RuntimeError(f"AQICN API trả về lỗi: {data}")
+
+    forecast_daily = data.get("data", {}).get("forecast", {}).get("daily", {})
+    tomorrow = (datetime.now(VN_TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    pm25_max = next((d["max"] for d in forecast_daily.get("pm25", []) if d.get("day") == tomorrow), None)
+    pm10_max = next((d["max"] for d in forecast_daily.get("pm10", []) if d.get("day") == tomorrow), None)
+
+    return forecast_pm_to_aqi(pm25_max, pm10_max)
+
+
+def send_discord_forecast(webhook_url: str, forecast_aqi: int, forecast_level: str, city: str) -> None:
+    """Gửi tin dự báo AQI ngày mai vào lúc 21h — độc lập với send_discord_alert
+    và send_discord_status_report, không tái sử dụng hay sửa 2 hàm đó."""
+    embed = {
+        "title": f"🔮 Dự báo AQI ngày mai — {city.title()}",
+        "description": (
+            f"**AQI dự kiến:** {forecast_aqi}\n"
+            f"**Mức dự kiến:** {forecast_level}\n"
+            "(Ước tính từ dữ liệu dự báo PM2.5/PM10 của AQICN)"
+        ),
+        "color": int(LEVEL_COLORS.get(forecast_level, "#808080").lstrip("#"), 16),
+    }
+    payload = {
+        "content": (
+            f"@everyone 🔮 Dự báo AQI {city.title()} ngày mai: {forecast_level} ({forecast_aqi})"
+        ),
+        "embeds": [embed],
+        "allowed_mentions": {"parse": ["everyone"]},
+    }
+
+    response = requests.post(webhook_url, json=payload, timeout=15)
+    response.raise_for_status()
 
 
 def send_discord_alert(webhook_url: str, old_aqi: int, old_level: str, new_aqi: int, new_level: str, timestamp: str, city: str) -> None:
@@ -163,6 +235,25 @@ def main() -> int:
         print("Chưa có dữ liệu trước đó và không phải giờ báo cáo, bỏ qua (lần chạy đầu tiên).")
     else:
         print(f"Ngưỡng không đổi ({new_level}) và không phải giờ báo cáo, không gửi thông báo.")
+
+    # --- Dự báo AQI ngày mai (21h) -----------------------------------------
+    # Khối này HOÀN TOÀN ĐỘC LẬP với logic phía trên (đổi ngưỡng / báo cáo
+    # định kỳ) — không đọc, không ghi đè bất kỳ biến nào ở trên, chỉ thêm 1
+    # tin nhắn riêng khi đúng khung giờ 21h, không làm thay đổi hành vi gốc.
+    if is_forecast_window():
+        try:
+            forecast_aqi = fetch_tomorrow_forecast_aqi(CITY, aqicn_token)
+        except Exception as exc:
+            print(f"Lỗi khi lấy dự báo AQICN: {exc}", file=sys.stderr)
+            forecast_aqi = None
+
+        if forecast_aqi is not None:
+            forecast_level = classify_aqi(forecast_aqi)
+            print(f"Dự báo ngày mai: AQI={forecast_aqi} -> level={forecast_level}. Đang gửi Discord...")
+            send_discord_forecast(discord_webhook, forecast_aqi, forecast_level, CITY)
+            print("Đã gửi dự báo Discord thành công.")
+        else:
+            print("Trạm không có dữ liệu dự báo cho ngày mai, bỏ qua.")
 
     return 0
 

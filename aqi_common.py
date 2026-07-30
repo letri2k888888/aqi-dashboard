@@ -54,6 +54,59 @@ def classify_aqi(aqi_value: int) -> str:
     return "Good"  # fallback, không nên xảy ra vì threshold thấp nhất là 0
 
 
+# ---------------------------------------------------------------------------
+# Quy đổi nồng độ PM2.5/PM10 dự báo sang thang AQI (chuẩn EPA)
+# ---------------------------------------------------------------------------
+# AQICN trả dữ liệu dự báo dưới dạng nồng độ (µg/m³) theo từng chất riêng lẻ,
+# KHÔNG có sẵn 1 con số AQI dự báo duy nhất — cần tự quy đổi bằng công thức
+# breakpoint tuyến tính từng đoạn của EPA: mỗi tuple là
+# (nồng độ thấp, nồng độ cao, AQI thấp, AQI cao) của 1 đoạn.
+
+PM25_BREAKPOINTS = [
+    (0.0, 12.0, 0, 50),
+    (12.1, 35.4, 51, 100),
+    (35.5, 55.4, 101, 150),
+    (55.5, 150.4, 151, 200),
+    (150.5, 250.4, 201, 300),
+    (250.5, 350.4, 301, 400),
+    (350.5, 500.4, 401, 500),
+]
+
+PM10_BREAKPOINTS = [
+    (0, 54, 0, 50),
+    (55, 154, 51, 100),
+    (155, 254, 101, 150),
+    (255, 354, 151, 200),
+    (355, 424, 201, 300),
+    (425, 504, 301, 400),
+    (505, 604, 401, 500),
+]
+
+
+def _concentration_to_aqi(concentration: float, breakpoints: list) -> int:
+    """Áp công thức breakpoint tuyến tính của EPA để quy đổi 1 nồng độ (µg/m³)
+    sang thang AQI (0-500)."""
+    for c_low, c_high, i_low, i_high in breakpoints:
+        if c_low <= concentration <= c_high:
+            return round((i_high - i_low) / (c_high - c_low) * (concentration - c_low) + i_low)
+    # Nồng độ vượt bảng breakpoint (ô nhiễm cực nặng) -> chốt ở mức AQI cao nhất.
+    return breakpoints[-1][3]
+
+
+def forecast_pm_to_aqi(pm25_value, pm10_value):
+    """Quy đổi nồng độ PM2.5/PM10 dự báo (µg/m³) sang 1 giá trị AQI duy nhất.
+
+    Lấy giá trị AQI cao hơn giữa 2 chất (giống cách AQICN tính AQI thật: lấy
+    max của các chỉ số thành phần). Trả về None nếu không có dữ liệu nào.
+    """
+    candidates = []
+    if pm25_value is not None:
+        candidates.append(_concentration_to_aqi(pm25_value, PM25_BREAKPOINTS))
+    if pm10_value is not None:
+        candidates.append(_concentration_to_aqi(pm10_value, PM10_BREAKPOINTS))
+    return max(candidates) if candidates else None
+
+
 def get_db_connection() -> sqlite3.Connection:
     """Mở kết nối SQLite, tự tạo bảng aqi_history nếu chưa tồn tại."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
