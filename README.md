@@ -138,6 +138,15 @@ bằng công thức breakpoint chuẩn EPA (hàm `forecast_pm_to_aqi` trong
 chúng mang thông tin khác nhau (hiện tại vs. tương lai) — đây là chủ đích,
 không phải lỗi trùng lặp.
 
+### So sánh với cùng giờ hôm qua
+
+Mỗi tin cảnh báo đổi ngưỡng hoặc báo cáo định kỳ đều tự động kèm thêm 1 dòng
+so sánh AQI hiện tại với bản ghi **gần "cùng giờ hôm qua" nhất** đã lưu trong
+SQLite (hàm `get_record_near` trong `aqi_common.py`, dung sai ±3 giờ). Nếu hệ
+thống chưa đủ dữ liệu (ví dụ mới triển khai chưa tới 1 ngày), dòng so sánh sẽ
+tự động không hiện ra thay vì báo sai lệch. Tính năng này không cần gọi thêm
+API nào — chỉ truy vấn lại dữ liệu lịch sử đã có sẵn.
+
 ## Ngưỡng phân loại AQI (chuẩn EPA)
 
 | Khoảng AQI | Mức |

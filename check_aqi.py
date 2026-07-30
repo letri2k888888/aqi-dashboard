@@ -16,6 +16,9 @@ Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để:
   5. Riêng biệt, KHÔNG ảnh hưởng tới logic ở bước 4: vào 21h hằng ngày (giờ
      Việt Nam), gửi thêm 1 tin dự báo AQI cho ngày mai (ước tính từ dữ liệu
      dự báo PM2.5/PM10 của AQICN), giúp người dùng chuẩn bị trước.
+  6. Mỗi tin cảnh báo/báo cáo (bước 4) đều kèm thêm 1 dòng so sánh AQI với
+     cùng giờ hôm qua (nếu có đủ dữ liệu), giúp người đọc thấy ngay xu hướng
+     tốt lên hay xấu đi mà không cần tự tra cứu.
 
 Biến môi trường bắt buộc:
   - AQICN_TOKEN     : API token lấy tại https://aqicn.org/data-platform/token/
@@ -27,7 +30,7 @@ Biến môi trường tuỳ chọn:
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -39,6 +42,7 @@ from aqi_common import (
     forecast_pm_to_aqi,
     get_db_connection,
     get_last_record,
+    get_record_near,
     insert_record,
 )
 
@@ -141,7 +145,48 @@ def send_discord_forecast(webhook_url: str, forecast_aqi: int, forecast_level: s
     response.raise_for_status()
 
 
-def send_discord_alert(webhook_url: str, old_aqi: int, old_level: str, new_aqi: int, new_level: str, timestamp: str, city: str) -> None:
+def format_yesterday_comparison(current_aqi: int, yesterday_record) -> str:
+    """Tạo câu mô tả đầy đủ so sánh AQI hiện tại với bản ghi gần "cùng giờ hôm
+    qua" nhất (yesterday_record, lấy từ get_record_near) — dùng làm value của
+    1 field riêng trong embed, cho dễ quan sát hơn là lẫn vào đoạn mô tả.
+    Trả về chuỗi rỗng nếu không có dữ liệu đủ gần để so sánh."""
+    if yesterday_record is None:
+        return ""
+    _, yesterday_aqi, _ = yesterday_record
+    delta = current_aqi - yesterday_aqi
+    if delta > 0:
+        return f"🔺 Tăng {delta} điểm ({yesterday_aqi} → {current_aqi})"
+    if delta < 0:
+        return f"🔻 Giảm {abs(delta)} điểm ({yesterday_aqi} → {current_aqi})"
+    return f"➖ Không đổi (vẫn {current_aqi})"
+
+
+def format_yesterday_delta_short(current_aqi: int, yesterday_record) -> str:
+    """Dạng RÚT GỌN của so sánh hôm qua, dùng trong "content" — phần duy nhất
+    hiện ra trên push notification/lock screen, nên phải ngắn. Trả về chuỗi
+    rỗng nếu không có dữ liệu để so sánh."""
+    if yesterday_record is None:
+        return ""
+    _, yesterday_aqi, _ = yesterday_record
+    delta = current_aqi - yesterday_aqi
+    if delta > 0:
+        return f" (▲{delta} so hôm qua)"
+    if delta < 0:
+        return f" (▼{abs(delta)} so hôm qua)"
+    return " (= hôm qua)"
+
+
+def send_discord_alert(
+    webhook_url: str,
+    old_aqi: int,
+    old_level: str,
+    new_aqi: int,
+    new_level: str,
+    timestamp: str,
+    city: str,
+    comparison_text: str = "",
+    comparison_short: str = "",
+) -> None:
     """Gửi thông báo đổi ngưỡng AQI vào kênh Discord thông qua Webhook."""
     embed = {
         "title": f"⚠️ Cảnh báo thay đổi mức AQI — {city.title()}",
@@ -152,15 +197,21 @@ def send_discord_alert(webhook_url: str, old_aqi: int, old_level: str, new_aqi: 
         ),
         "color": int(LEVEL_COLORS.get(new_level, "#808080").lstrip("#"), 16),
     }
+    if comparison_text:
+        # Dùng "fields" thay vì nhét vào description -> Discord hiển thị
+        # thành 1 khối riêng có tiêu đề in đậm, dễ quan sát hơn hẳn so với
+        # 1 dòng text lẫn trong đoạn mô tả.
+        embed["fields"] = [{"name": "📅 So với cùng giờ hôm qua", "value": comparison_text, "inline": False}]
+
     payload = {
         # @everyone -> mọi thành viên server đều bị ping (kể cả offline), nên
         # ai vào server là tự động nhận thông báo, không cần khai báo User ID.
         # Push notification trên điện thoại chỉ hiện được nội dung của "content",
         # KHÔNG hiện nội dung bên trong "embeds" -> phải nhét luôn thông tin tóm
-        # tắt (AQI cũ->mới, ngưỡng cũ->mới) vào đây.
+        # tắt (AQI cũ->mới, ngưỡng cũ->mới, và cả so sánh hôm qua) vào đây.
         "content": (
             f"@everyone ⚠️ AQI {city.title()} đổi mức: "
-            f"{old_level} ({old_aqi}) → {new_level} ({new_aqi})"
+            f"{old_level} ({old_aqi}) → {new_level} ({new_aqi}){comparison_short}"
         ),
         "embeds": [embed],
         # Discord mặc định KHÔNG ping thật dù content có chữ "@everyone", trừ
@@ -172,20 +223,27 @@ def send_discord_alert(webhook_url: str, old_aqi: int, old_level: str, new_aqi: 
     response.raise_for_status()
 
 
-def send_discord_status_report(webhook_url: str, aqi_value: int, level: str, timestamp: str, city: str) -> None:
+def send_discord_status_report(
+    webhook_url: str,
+    aqi_value: int,
+    level: str,
+    timestamp: str,
+    city: str,
+    comparison_text: str = "",
+    comparison_short: str = "",
+) -> None:
     """Gửi báo cáo AQI hiện trạng vào mốc giờ cố định (6h/12h/18h), dùng khi
     ngưỡng KHÔNG đổi nhưng vẫn muốn cập nhật định kỳ cho người theo dõi."""
     embed = {
         "title": f"📊 Báo cáo AQI định kỳ — {city.title()}",
-        "description": (
-            f"**AQI hiện tại:** {aqi_value}\n"
-            f"**Mức:** {level}\n"
-            f"**Thời gian:** {timestamp} (UTC)"
-        ),
+        "description": f"**AQI hiện tại:** {aqi_value}\n**Mức:** {level}\n**Thời gian:** {timestamp} (UTC)",
         "color": int(LEVEL_COLORS.get(level, "#808080").lstrip("#"), 16),
     }
+    if comparison_text:
+        embed["fields"] = [{"name": "📅 So với cùng giờ hôm qua", "value": comparison_text, "inline": False}]
+
     payload = {
-        "content": f"@everyone 📊 Báo cáo AQI {city.title()}: hiện đang ở mức {level} ({aqi_value})",
+        "content": f"@everyone 📊 Báo cáo AQI {city.title()}: hiện đang ở mức {level} ({aqi_value}){comparison_short}",
         "embeds": [embed],
         "allowed_mentions": {"parse": ["everyone"]},
     }
@@ -220,16 +278,25 @@ def main() -> int:
 
     print(f"[{timestamp}] {CITY}: AQI={aqi_value} -> level={new_level}")
 
+    # So sánh với cùng giờ hôm qua (không ảnh hưởng logic ưu tiên bên dưới,
+    # chỉ tạo thêm 1 dòng mô tả để nhét vào nội dung tin nhắn nếu có gửi).
+    yesterday_target = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds")
+    conn = get_db_connection()
+    yesterday_record = get_record_near(conn, yesterday_target)
+    conn.close()
+    comparison_text = format_yesterday_comparison(aqi_value, yesterday_record)
+    comparison_short = format_yesterday_delta_short(aqi_value, yesterday_record)
+
     level_changed = last_record is not None and last_record[2] != new_level
 
     if level_changed:
         _, old_aqi, old_level = last_record
         print(f"Ngưỡng thay đổi: {old_level} -> {new_level}. Đang gửi cảnh báo Discord...")
-        send_discord_alert(discord_webhook, old_aqi, old_level, aqi_value, new_level, timestamp, CITY)
+        send_discord_alert(discord_webhook, old_aqi, old_level, aqi_value, new_level, timestamp, CITY, comparison_text, comparison_short)
         print("Đã gửi cảnh báo Discord thành công.")
     elif is_scheduled_report_window():
         print("Đang trong khung giờ báo cáo định kỳ (6h/12h/18h). Đang gửi báo cáo Discord...")
-        send_discord_status_report(discord_webhook, aqi_value, new_level, timestamp, CITY)
+        send_discord_status_report(discord_webhook, aqi_value, new_level, timestamp, CITY, comparison_text, comparison_short)
         print("Đã gửi báo cáo Discord thành công.")
     elif last_record is None:
         print("Chưa có dữ liệu trước đó và không phải giờ báo cáo, bỏ qua (lần chạy đầu tiên).")

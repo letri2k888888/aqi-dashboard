@@ -137,6 +137,30 @@ def get_last_record(conn: sqlite3.Connection):
     return cur.fetchone()
 
 
+def get_record_near(conn: sqlite3.Connection, target_timestamp: str, tolerance_seconds: int = 3 * 3600):
+    """Tìm bản ghi có timestamp GẦN target_timestamp nhất (chênh lệch tuyệt đối
+    theo giây), dùng để so sánh AQI với "cùng giờ hôm qua".
+
+    Trả về (timestamp, aqi_value, level), hoặc None nếu bảng rỗng hoặc bản ghi
+    gần nhất vẫn cách target_timestamp quá xa (quá tolerance_seconds) — trường
+    hợp này xảy ra khi hệ thống chưa đủ 1 ngày dữ liệu.
+    """
+    cur = conn.execute(
+        """
+        SELECT timestamp, aqi_value, level,
+               ABS(strftime('%s', timestamp) - strftime('%s', ?)) AS diff_seconds
+        FROM aqi_history
+        ORDER BY diff_seconds ASC
+        LIMIT 1
+        """,
+        (target_timestamp,),
+    )
+    row = cur.fetchone()
+    if row is None or row[3] > tolerance_seconds:
+        return None
+    return row[0], row[1], row[2]
+
+
 def insert_record(conn: sqlite3.Connection, aqi_value: int, level: str) -> str:
     """Ghi một bản ghi AQI mới vào SQLite, trả về timestamp (UTC, ISO 8601) đã dùng."""
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
