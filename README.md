@@ -127,18 +127,28 @@ gửi Discord trong 2 trường hợp (ưu tiên theo thứ tự, không gửi t
 
 Ngoài 2 trường hợp trên, script không gửi gì cả, tránh spam kênh Discord.
 
-### Dự báo AQI ngày mai (21h hằng ngày)
+### Dự báo AQI ngày mai (21h hằng ngày) — MẶC ĐỊNH TẮT
 
-Tách biệt hoàn toàn với logic chống spam ở trên (không tranh chấp, không thay
-thế): vào khung 30 phút đầu của **21h giờ Việt Nam** mỗi ngày, script gọi thêm
-dữ liệu dự báo PM2.5/PM10 của AQICN cho ngày mai, lấy giá trị **trung bình cả
-ngày** (`avg`, không phải `max`) rồi tự quy đổi sang thang AQI bằng công thức
-breakpoint chuẩn EPA (hàm `forecast_pm_to_aqi` trong `aqi_common.py`). Tin
-nhắn gửi đi luôn ghi rõ đây là **giá trị trung bình** — mức cao nhất thực tế
-trong ngày có thể vượt con số này, tránh gây hiểu lầm là mức đỉnh điểm. Nếu
-đúng lúc 21h mà AQI cũng vừa đổi ngưỡng, cả 2 tin (cảnh báo đổi ngưỡng + dự
-báo ngày mai) đều được gửi vì chúng mang thông tin khác nhau (hiện tại vs.
-tương lai) — đây là chủ đích, không phải lỗi trùng lặp.
+⚠️ **Tính năng này hiện đang tắt theo mặc định** (`FORECAST_ENABLED=false`).
+Lý do: đã kiểm chứng thực tế và phát hiện dữ liệu `forecast.daily` của AQICN
+**không khớp với số đo thật của trạm đang theo dõi** — ví dụ ngày 2026-08-03,
+dự báo cho đúng ngày đó quy đổi ra AQI≈147 (trung bình) trong khi số đo thật
+tại trạm chỉ 93 (chênh hơn 1.5 lần dù so cùng ngày, cùng trạm). Nhiều khả
+năng dữ liệu forecast lấy từ mô hình khí tượng khu vực rộng, không gắn với
+đúng cảm biến của trạm cụ thể — gửi cảnh báo dựa trên số liệu này có nguy cơ
+làm sai lệch nghiêm trọng và giảm uy tín hệ thống. Code vẫn được giữ nguyên
+trong repo (không xoá) để tham khảo hoặc bật lại nếu sau này tìm được nguồn
+dự báo đáng tin cậy hơn.
+
+**Cách bật lại (không khuyến nghị trừ khi đã xác minh lại độ chính xác):**
+thêm Repository variable `FORECAST_ENABLED` = `true`.
+
+Thiết kế kỹ thuật (khi bật): tách biệt hoàn toàn với logic chống spam ở trên
+(không tranh chấp, không thay thế) — vào khung 30 phút đầu của **21h giờ Việt
+Nam** mỗi ngày, script gọi thêm dữ liệu dự báo PM2.5/PM10 của AQICN cho ngày
+mai, lấy giá trị **trung bình cả ngày** (`avg`) rồi tự quy đổi sang thang AQI
+bằng công thức breakpoint chuẩn EPA (hàm `forecast_pm_to_aqi` trong
+`aqi_common.py`).
 
 ### So sánh với cùng giờ hôm qua
 

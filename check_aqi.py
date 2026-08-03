@@ -13,20 +13,33 @@ Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để:
         đặn trong ngày dù AQI không biến động.
      Ngoài 2 trường hợp trên (không đổi ngưỡng và không phải giờ báo cáo) ->
      không gửi gì cả, tránh spam kênh Discord.
-  5. Riêng biệt, KHÔNG ảnh hưởng tới logic ở bước 4: vào 21h hằng ngày (giờ
-     Việt Nam), gửi thêm 1 tin dự báo AQI cho ngày mai (ước tính từ giá trị
-     TRUNG BÌNH dự báo PM2.5/PM10 của AQICN, có ghi chú rõ đây là trung bình
-     chứ không phải mức cao nhất), giúp người dùng chuẩn bị trước.
+  5. [MẶC ĐỊNH TẮT — xem ghi chú bên dưới] Riêng biệt, không ảnh hưởng tới
+     logic ở bước 4: vào 21h hằng ngày (giờ Việt Nam), gửi thêm 1 tin dự báo
+     AQI cho ngày mai (ước tính từ giá trị trung bình dự báo PM2.5/PM10 của
+     AQICN).
   6. Mỗi tin cảnh báo/báo cáo (bước 4) đều kèm thêm 1 dòng so sánh AQI với
      cùng giờ hôm qua (nếu có đủ dữ liệu), giúp người đọc thấy ngay xu hướng
      tốt lên hay xấu đi mà không cần tự tra cứu.
+
+GHI CHÚ QUAN TRỌNG về tính năng dự báo (bước 5): đã kiểm chứng thực tế và
+phát hiện `forecast.daily` của AQICN KHÔNG khớp với số đo thật của trạm đang
+theo dõi — ví dụ ngày 2026-08-03, dự báo cho ĐÚNG NGÀY ĐÓ quy đổi ra AQI≈147
+(trung bình) trong khi số đo thật tại trạm chỉ 93 (chênh hơn 1.5 lần ngay cả
+khi so cùng ngày). Nhiều khả năng dữ liệu forecast lấy từ mô hình khí tượng
+khu vực rộng, không gắn với đúng cảm biến của trạm — nên KHÔNG đáng tin cậy
+để cảnh báo người dùng. Vì vậy tính năng này mặc định TẮT (xem FORECAST_ENABLED
+bên dưới); code vẫn giữ nguyên trong repo để tham khảo/bật lại nếu sau này có
+nguồn dự báo đáng tin cậy hơn.
 
 Biến môi trường bắt buộc:
   - AQICN_TOKEN     : API token lấy tại https://aqicn.org/data-platform/token/
   - DISCORD_WEBHOOK : URL webhook của kênh Discord muốn nhận cảnh báo
 
 Biến môi trường tuỳ chọn:
-  - AQI_CITY : tên thành phố/trạm AQICN, mặc định "hanoi"
+  - AQI_CITY          : tên thành phố/trạm AQICN, mặc định "hanoi"
+  - FORECAST_ENABLED  : "true" để bật lại tin dự báo 21h, mặc định "false"
+                        (tắt) do dữ liệu forecast không đáng tin cậy — xem
+                        ghi chú ở trên.
 """
 
 import os
@@ -58,6 +71,13 @@ SCHEDULED_REPORT_HOURS = {6, 12, 18}
 # đây là 1 loại tin nhắn khác (dự báo tương lai, không phải hiện trạng), chạy
 # độc lập, không ảnh hưởng tới logic ưu tiên đổi ngưỡng / báo cáo định kỳ.
 FORECAST_HOUR = 21
+
+# Mặc định TẮT: đã kiểm chứng dữ liệu forecast.daily của AQICN không khớp với
+# số đo thật của trạm đang theo dõi (chênh hơn 1.5 lần ngay cả khi so cùng
+# ngày) — xem ghi chú chi tiết ở đầu file. Dùng "or" (không phải giá trị mặc
+# định của .get()) vì lý do tương tự AQI_CITY: GitHub Actions luôn set biến
+# env dù rỗng khi chưa cấu hình vars.
+FORECAST_ENABLED = (os.environ.get("FORECAST_ENABLED") or "false").strip().lower() == "true"
 
 
 def is_scheduled_report_window(now: datetime | None = None) -> bool:
@@ -313,7 +333,9 @@ def main() -> int:
     # Khối này HOÀN TOÀN ĐỘC LẬP với logic phía trên (đổi ngưỡng / báo cáo
     # định kỳ) — không đọc, không ghi đè bất kỳ biến nào ở trên, chỉ thêm 1
     # tin nhắn riêng khi đúng khung giờ 21h, không làm thay đổi hành vi gốc.
-    if is_forecast_window():
+    # MẶC ĐỊNH TẮT (FORECAST_ENABLED=false) vì dữ liệu forecast của AQICN
+    # không khớp với số đo thật của trạm — xem ghi chú đầu file.
+    if FORECAST_ENABLED and is_forecast_window():
         try:
             forecast_aqi = fetch_tomorrow_forecast_aqi(CITY, aqicn_token)
         except Exception as exc:
