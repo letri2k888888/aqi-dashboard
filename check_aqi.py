@@ -93,6 +93,13 @@ FORECAST_ENABLED = (os.environ.get("FORECAST_ENABLED") or "false").strip().lower
 # mạng thoáng qua (transient), chỉ báo khi thực sự là sự cố kéo dài.
 FAILURE_ALERT_THRESHOLD = 3
 
+# Số giờ tối đa cho phép giữa lần đo gần nhất của TRẠM và thời điểm hiện tại,
+# trước khi coi là trạm "đứng hình" — API vẫn trả status=ok (không phải lỗi
+# HTTP) nhưng số liệu không còn được cập nhật thật. AQICN thường cập nhật
+# khoảng mỗi giờ, nên 3 giờ là ngưỡng an toàn, tránh báo nhầm khi trạm chỉ
+# đang chậm cập nhật bình thường.
+STALE_STATION_HOURS = 3
+
 
 def is_scheduled_report_window(now: datetime | None = None) -> bool:
     """True nếu thời điểm hiện tại (giờ VN) nằm trong 30 phút đầu của 1 trong
@@ -110,8 +117,12 @@ def is_forecast_window(now: datetime | None = None) -> bool:
     return now_vn.hour == FORECAST_HOUR and now_vn.minute < 30
 
 
-def fetch_current_aqi(city: str, token: str) -> int:
-    """Gọi AQICN API và trả về giá trị AQI hiện tại (số nguyên).
+def fetch_current_aqi(city: str, token: str):
+    """Gọi AQICN API, trả về (aqi_value, station_time_iso).
+
+    station_time_iso là thời điểm TRẠM tự ghi nhận lần đo gần nhất (không
+    phải thời điểm mình gọi API) — dùng để phát hiện trạm "đứng hình" (API
+    vẫn trả status=ok nhưng số liệu đã cũ, không phải lỗi HTTP thông thường).
 
     Raise RuntimeError nếu API trả lỗi hoặc dữ liệu không hợp lệ.
     """
@@ -128,7 +139,24 @@ def fetch_current_aqi(city: str, token: str) -> int:
         # AQICN đôi khi trả "-" khi trạm tạm thời không có dữ liệu
         raise RuntimeError(f"Giá trị AQI không hợp lệ (trạm có thể đang offline): {aqi_value}")
 
-    return aqi_value
+    station_time_iso = data.get("data", {}).get("time", {}).get("iso")
+
+    return aqi_value, station_time_iso
+
+
+def is_station_data_stale(station_time_iso, now: datetime | None = None) -> bool:
+    """True nếu thời điểm trạm tự ghi nhận (station_time_iso) đã cách hiện
+    tại quá STALE_STATION_HOURS giờ, hoặc không đọc được thời gian trạm —
+    tức API vẫn trả status=ok nhưng số liệu thực chất đã cũ/đứng hình."""
+    if not station_time_iso:
+        return True  # không có thời gian trạm -> không thể xác nhận độ mới, coi là đáng ngờ
+    try:
+        station_time = datetime.fromisoformat(station_time_iso)
+    except ValueError:
+        return True
+    now = now or datetime.now(timezone.utc)
+    age_hours = (now - station_time).total_seconds() / 3600
+    return age_hours > STALE_STATION_HOURS
 
 
 def fetch_tomorrow_forecast_aqi(city: str, token: str):
@@ -319,6 +347,24 @@ def send_discord_status_report(
     response.raise_for_status()
 
 
+def _handle_fetch_problem(discord_webhook: str, error_message: str) -> None:
+    """Dùng chung cho 2 trường hợp coi như "không lấy được dữ liệu tin cậy":
+    API lỗi hẳn, hoặc trạm đứng hình (API trả ok nhưng số liệu cũ). Tăng bộ
+    đếm lỗi liên tiếp trong system_status, gửi cảnh báo Discord nếu đạt
+    ngưỡng FAILURE_ALERT_THRESHOLD và chưa gửi cho đợt lỗi hiện tại."""
+    try:
+        conn = get_db_connection()
+        failures = record_fetch_failure(conn)
+        if failures >= FAILURE_ALERT_THRESHOLD and not has_sent_failure_alert(conn):
+            print(f"Đã lỗi {failures} lần liên tiếp. Đang gửi cảnh báo sự cố Discord...")
+            send_discord_error_alert(discord_webhook, error_message, failures, CITY)
+            mark_failure_alert_sent(conn)
+            print("Đã gửi cảnh báo sự cố Discord thành công.")
+        conn.close()
+    except Exception as alert_exc:
+        print(f"Lỗi khi xử lý cảnh báo sự cố: {alert_exc}", file=sys.stderr)
+
+
 def main() -> int:
     aqicn_token = os.environ.get("AQICN_TOKEN")
     discord_webhook = os.environ.get("DISCORD_WEBHOOK")
@@ -331,22 +377,20 @@ def main() -> int:
         return 1
 
     try:
-        aqi_value = fetch_current_aqi(CITY, aqicn_token)
+        aqi_value, station_time_iso = fetch_current_aqi(CITY, aqicn_token)
     except Exception as exc:
         print(f"Lỗi khi lấy dữ liệu AQICN: {exc}", file=sys.stderr)
-        # Theo dõi lỗi liên tiếp -> cảnh báo Discord nếu lỗi kéo dài, để
-        # người dùng biết hệ thống đang gặp sự cố thay vì im lặng hoàn toàn.
-        try:
-            conn = get_db_connection()
-            failures = record_fetch_failure(conn)
-            if failures >= FAILURE_ALERT_THRESHOLD and not has_sent_failure_alert(conn):
-                print(f"Đã lỗi {failures} lần liên tiếp. Đang gửi cảnh báo sự cố Discord...")
-                send_discord_error_alert(discord_webhook, str(exc), failures, CITY)
-                mark_failure_alert_sent(conn)
-                print("Đã gửi cảnh báo sự cố Discord thành công.")
-            conn.close()
-        except Exception as alert_exc:
-            print(f"Lỗi khi xử lý cảnh báo sự cố: {alert_exc}", file=sys.stderr)
+        _handle_fetch_problem(discord_webhook, str(exc))
+        return 1
+
+    if is_station_data_stale(station_time_iso):
+        # API trả status=ok (không phải lỗi HTTP) nhưng số liệu trạm đã cũ —
+        # xử lý giống hệt 1 lần thất bại, KHÔNG lưu vào lịch sử và KHÔNG chạy
+        # tiếp logic thông báo, để tránh nhét số liệu cũ vào SQLite làm sai
+        # lệch tính năng "so với hôm qua" hoặc gửi cảnh báo dựa trên số cũ.
+        stale_msg = f"Trạm không cập nhật dữ liệu mới (lần đo gần nhất: {station_time_iso})"
+        print(f"Cảnh báo: {stale_msg}", file=sys.stderr)
+        _handle_fetch_problem(discord_webhook, stale_msg)
         return 1
 
     new_level = classify_aqi(aqi_value)
