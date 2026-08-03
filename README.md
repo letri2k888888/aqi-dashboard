@@ -150,6 +150,12 @@ mai, lấy giá trị **trung bình cả ngày** (`avg`) rồi tự quy đổi s
 bằng công thức breakpoint chuẩn EPA (hàm `forecast_pm_to_aqi` trong
 `aqi_common.py`).
 
+**Đồng bộ với dashboard:** dù bật hay tắt, dữ liệu dự báo **không** được lưu
+vào SQLite (`db/aqi_history.db`) — chỉ dùng tạm thời trong lúc gửi Discord rồi
+bỏ. Vì vậy `dashboard.py` **không** và sẽ không bao giờ hiển thị số liệu dự
+báo (chỉ hiển thị AQI thực đo đã lưu lịch sử); không có sự khác biệt cần
+đồng bộ giữa 2 nơi vì dashboard đơn giản là không liên quan đến tính năng này.
+
 ### So sánh với cùng giờ hôm qua
 
 Mỗi tin cảnh báo đổi ngưỡng hoặc báo cáo định kỳ đều tự động kèm thêm 1 dòng
