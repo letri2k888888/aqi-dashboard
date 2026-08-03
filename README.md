@@ -131,12 +131,14 @@ Ngoài 2 trường hợp trên, script không gửi gì cả, tránh spam kênh 
 
 Tách biệt hoàn toàn với logic chống spam ở trên (không tranh chấp, không thay
 thế): vào khung 30 phút đầu của **21h giờ Việt Nam** mỗi ngày, script gọi thêm
-dữ liệu dự báo PM2.5/PM10 của AQICN cho ngày mai, tự quy đổi sang thang AQI
-bằng công thức breakpoint chuẩn EPA (hàm `forecast_pm_to_aqi` trong
-`aqi_common.py`), rồi gửi 1 tin dự báo riêng. Nếu đúng lúc 21h mà AQI cũng vừa
-đổi ngưỡng, cả 2 tin (cảnh báo đổi ngưỡng + dự báo ngày mai) đều được gửi vì
-chúng mang thông tin khác nhau (hiện tại vs. tương lai) — đây là chủ đích,
-không phải lỗi trùng lặp.
+dữ liệu dự báo PM2.5/PM10 của AQICN cho ngày mai, lấy giá trị **trung bình cả
+ngày** (`avg`, không phải `max`) rồi tự quy đổi sang thang AQI bằng công thức
+breakpoint chuẩn EPA (hàm `forecast_pm_to_aqi` trong `aqi_common.py`). Tin
+nhắn gửi đi luôn ghi rõ đây là **giá trị trung bình** — mức cao nhất thực tế
+trong ngày có thể vượt con số này, tránh gây hiểu lầm là mức đỉnh điểm. Nếu
+đúng lúc 21h mà AQI cũng vừa đổi ngưỡng, cả 2 tin (cảnh báo đổi ngưỡng + dự
+báo ngày mai) đều được gửi vì chúng mang thông tin khác nhau (hiện tại vs.
+tương lai) — đây là chủ đích, không phải lỗi trùng lặp.
 
 ### So sánh với cùng giờ hôm qua
 

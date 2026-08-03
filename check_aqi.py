@@ -14,8 +14,9 @@ Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để:
      Ngoài 2 trường hợp trên (không đổi ngưỡng và không phải giờ báo cáo) ->
      không gửi gì cả, tránh spam kênh Discord.
   5. Riêng biệt, KHÔNG ảnh hưởng tới logic ở bước 4: vào 21h hằng ngày (giờ
-     Việt Nam), gửi thêm 1 tin dự báo AQI cho ngày mai (ước tính từ dữ liệu
-     dự báo PM2.5/PM10 của AQICN), giúp người dùng chuẩn bị trước.
+     Việt Nam), gửi thêm 1 tin dự báo AQI cho ngày mai (ước tính từ giá trị
+     TRUNG BÌNH dự báo PM2.5/PM10 của AQICN, có ghi chú rõ đây là trung bình
+     chứ không phải mức cao nhất), giúp người dùng chuẩn bị trước.
   6. Mỗi tin cảnh báo/báo cáo (bước 4) đều kèm thêm 1 dòng so sánh AQI với
      cùng giờ hôm qua (nếu có đủ dữ liệu), giúp người đọc thấy ngay xu hướng
      tốt lên hay xấu đi mà không cần tự tra cứu.
@@ -115,10 +116,14 @@ def fetch_tomorrow_forecast_aqi(city: str, token: str):
     forecast_daily = data.get("data", {}).get("forecast", {}).get("daily", {})
     tomorrow = (datetime.now(VN_TIMEZONE) + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    pm25_max = next((d["max"] for d in forecast_daily.get("pm25", []) if d.get("day") == tomorrow), None)
-    pm10_max = next((d["max"] for d in forecast_daily.get("pm10", []) if d.get("day") == tomorrow), None)
+    # Dùng "avg" (trung bình cả ngày) thay vì "max" (đỉnh điểm trong ngày) —
+    # phản ánh mức ô nhiễm điển hình của ngày mai thay vì kịch bản xấu nhất,
+    # tránh gây cảnh báo quá mức. Tin nhắn gửi đi phải nói rõ đây là giá trị
+    # trung bình, không phải mức cao nhất có thể xảy ra trong ngày.
+    pm25_avg = next((d["avg"] for d in forecast_daily.get("pm25", []) if d.get("day") == tomorrow), None)
+    pm10_avg = next((d["avg"] for d in forecast_daily.get("pm10", []) if d.get("day") == tomorrow), None)
 
-    return forecast_pm_to_aqi(pm25_max, pm10_max)
+    return forecast_pm_to_aqi(pm25_avg, pm10_avg)
 
 
 def send_discord_forecast(webhook_url: str, forecast_aqi: int, forecast_level: str, city: str) -> None:
@@ -127,15 +132,16 @@ def send_discord_forecast(webhook_url: str, forecast_aqi: int, forecast_level: s
     embed = {
         "title": f"🔮 Dự báo AQI ngày mai — {city.title()}",
         "description": (
-            f"**AQI dự kiến:** {forecast_aqi}\n"
+            f"**AQI dự kiến (trung bình cả ngày):** {forecast_aqi}\n"
             f"**Mức dự kiến:** {forecast_level}\n"
-            "(Ước tính từ dữ liệu dự báo PM2.5/PM10 của AQICN)"
+            "⚠️ Đây là **giá trị trung bình** ước tính từ dự báo PM2.5/PM10 của AQICN — "
+            "mức cao nhất thực tế trong ngày có thể vượt con số này."
         ),
         "color": int(LEVEL_COLORS.get(forecast_level, "#808080").lstrip("#"), 16),
     }
     payload = {
         "content": (
-            f"@everyone 🔮 Dự báo AQI {city.title()} ngày mai: {forecast_level} ({forecast_aqi})"
+            f"@everyone 🔮 Dự báo AQI {city.title()} ngày mai (TB): {forecast_level} ({forecast_aqi})"
         ),
         "embeds": [embed],
         "allowed_mentions": {"parse": ["everyone"]},
