@@ -165,6 +165,25 @@ thống chưa đủ dữ liệu (ví dụ mới triển khai chưa tới 1 ngày
 tự động không hiện ra thay vì báo sai lệch. Tính năng này không cần gọi thêm
 API nào — chỉ truy vấn lại dữ liệu lịch sử đã có sẵn.
 
+### Cảnh báo khi hệ thống gặp sự cố
+
+Vá lỗ hổng "im lặng khi hỏng": trước đây nếu AQICN API lỗi, script chỉ ghi
+log, không ai biết trừ khi tự vào xem GitHub Actions. Giờ có 2 cơ chế phát
+hiện sự cố, đều xử lý qua chung 1 luồng cảnh báo:
+
+1. **Lỗi API thật** (HTTP lỗi, hoặc AQICN trả `status != "ok"`).
+2. **Trạm "đứng hình"** — API vẫn trả `status: "ok"` (không phải lỗi HTTP)
+   nhưng dữ liệu đã cũ. Phát hiện bằng cách so sánh thời điểm trạm tự ghi
+   nhận lần đo gần nhất (`data.time.iso`) với thời gian hiện tại — nếu cách
+   nhau quá **3 giờ**, coi là đứng hình (`STALE_STATION_HOURS` trong
+   `check_aqi.py`). Trường hợp này KHÔNG được lưu vào SQLite và KHÔNG chạy
+   logic thông báo, tránh làm sai lệch tính năng so sánh hôm qua.
+
+Cả 2 trường hợp đều tăng bộ đếm lỗi liên tiếp (lưu trong bảng `system_status`
+của SQLite). Nếu lỗi đủ **3 lần chạy liên tiếp**, gửi 1 tin cảnh báo Discord
+nổi bật (cùng phong cách `@everyone` như tin đổi ngưỡng) — chỉ gửi **1 lần**
+cho mỗi đợt lỗi, tự reset khi lấy được dữ liệu tươi trở lại.
+
 ## Ngưỡng phân loại AQI (chuẩn EPA)
 
 | Khoảng AQI | Mức |
