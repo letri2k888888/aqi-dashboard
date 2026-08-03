@@ -108,7 +108,9 @@ def forecast_pm_to_aqi(pm25_value, pm10_value):
 
 
 def get_db_connection() -> sqlite3.Connection:
-    """Mở kết nối SQLite, tự tạo bảng aqi_history nếu chưa tồn tại."""
+    """Mở kết nối SQLite, tự tạo bảng aqi_history và system_status nếu chưa
+    tồn tại (system_status dùng để theo dõi số lần lấy dữ liệu AQICN thất
+    bại liên tiếp, phục vụ tính năng cảnh báo sự cố hệ thống)."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
@@ -120,6 +122,18 @@ def get_db_connection() -> sqlite3.Connection:
             level TEXT NOT NULL
         )
         """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS system_status (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            failure_alert_sent INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO system_status (id, consecutive_failures, failure_alert_sent) VALUES (1, 0, 0)"
     )
     conn.commit()
     return conn
@@ -170,3 +184,36 @@ def insert_record(conn: sqlite3.Connection, aqi_value: int, level: str) -> str:
     )
     conn.commit()
     return timestamp
+
+
+# ---------------------------------------------------------------------------
+# Theo dõi sự cố hệ thống (số lần lấy dữ liệu AQICN thất bại liên tiếp)
+# ---------------------------------------------------------------------------
+
+def record_fetch_success(conn: sqlite3.Connection) -> None:
+    """Gọi khi lấy dữ liệu AQICN thành công — reset bộ đếm lỗi liên tiếp về 0
+    và cho phép gửi cảnh báo mới nếu có đợt lỗi khác xảy ra sau này."""
+    conn.execute("UPDATE system_status SET consecutive_failures = 0, failure_alert_sent = 0 WHERE id = 1")
+    conn.commit()
+
+
+def record_fetch_failure(conn: sqlite3.Connection) -> int:
+    """Gọi khi lấy dữ liệu AQICN thất bại — tăng bộ đếm lỗi liên tiếp lên 1,
+    trả về giá trị mới."""
+    conn.execute("UPDATE system_status SET consecutive_failures = consecutive_failures + 1 WHERE id = 1")
+    conn.commit()
+    row = conn.execute("SELECT consecutive_failures FROM system_status WHERE id = 1").fetchone()
+    return row[0]
+
+
+def has_sent_failure_alert(conn: sqlite3.Connection) -> bool:
+    """True nếu đã gửi cảnh báo sự cố cho đợt lỗi liên tiếp hiện tại rồi —
+    dùng để chỉ gửi 1 lần duy nhất mỗi đợt lỗi, tránh spam khi lỗi kéo dài."""
+    row = conn.execute("SELECT failure_alert_sent FROM system_status WHERE id = 1").fetchone()
+    return bool(row[0]) if row else False
+
+
+def mark_failure_alert_sent(conn: sqlite3.Connection) -> None:
+    """Đánh dấu đã gửi cảnh báo cho đợt lỗi hiện tại."""
+    conn.execute("UPDATE system_status SET failure_alert_sent = 1 WHERE id = 1")
+    conn.commit()

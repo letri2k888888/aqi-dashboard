@@ -20,6 +20,11 @@ Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để:
   6. Mỗi tin cảnh báo/báo cáo (bước 4) đều kèm thêm 1 dòng so sánh AQI với
      cùng giờ hôm qua (nếu có đủ dữ liệu), giúp người đọc thấy ngay xu hướng
      tốt lên hay xấu đi mà không cần tự tra cứu.
+  7. Nếu gọi AQICN API thất bại 3 lần chạy LIÊN TIẾP trở lên, gửi 1 tin cảnh
+     báo sự cố hệ thống (định dạng nổi bật, @everyone, giống bước 4) — chỉ
+     gửi 1 lần cho mỗi đợt lỗi (không lặp lại mỗi 30 phút), tự reset khi lấy
+     dữ liệu thành công trở lại. Vá lỗ hổng "im lặng khi hỏng": trước đây lỗi
+     chỉ ghi log, không ai biết trừ khi tự vào xem GitHub Actions.
 
 GHI CHÚ QUAN TRỌNG về tính năng dự báo (bước 5): đã kiểm chứng thực tế và
 phát hiện `forecast.daily` của AQICN KHÔNG khớp với số đo thật của trạm đang
@@ -57,7 +62,11 @@ from aqi_common import (
     get_db_connection,
     get_last_record,
     get_record_near,
+    has_sent_failure_alert,
     insert_record,
+    mark_failure_alert_sent,
+    record_fetch_failure,
+    record_fetch_success,
 )
 
 AQICN_API_URL = "https://api.waqi.info/feed/{city}/?token={token}"
@@ -78,6 +87,11 @@ FORECAST_HOUR = 21
 # định của .get()) vì lý do tương tự AQI_CITY: GitHub Actions luôn set biến
 # env dù rỗng khi chưa cấu hình vars.
 FORECAST_ENABLED = (os.environ.get("FORECAST_ENABLED") or "false").strip().lower() == "true"
+
+# Số lần lấy dữ liệu AQICN thất bại LIÊN TIẾP trước khi gửi cảnh báo sự cố hệ
+# thống — chờ vài lần thay vì báo ngay lần đầu, để tránh báo động vì 1 lỗi
+# mạng thoáng qua (transient), chỉ báo khi thực sự là sự cố kéo dài.
+FAILURE_ALERT_THRESHOLD = 3
 
 
 def is_scheduled_report_window(now: datetime | None = None) -> bool:
@@ -202,6 +216,33 @@ def format_yesterday_delta_short(current_aqi: int, yesterday_record) -> str:
     return " (= hôm qua)"
 
 
+def send_discord_error_alert(webhook_url: str, error_message: str, consecutive_failures: int, city: str) -> None:
+    """Gửi cảnh báo khi hệ thống lấy dữ liệu AQICN thất bại LIÊN TIẾP nhiều
+    lần. Cố tình dùng cùng phong cách nổi bật với send_discord_alert
+    (@everyone, embed riêng) để người dùng chú ý ngay — đây là tin quan
+    trọng: có thể đang không nhận được cảnh báo AQI thật nào trong lúc lỗi."""
+    embed = {
+        "title": f"🚨 Hệ thống theo dõi AQI gặp sự cố — {city.title()}",
+        "description": (
+            f"Không lấy được dữ liệu AQI trong **{consecutive_failures} lần chạy liên tiếp**.\n"
+            f"**Lỗi gần nhất:** {error_message}\n"
+            "Dữ liệu AQI hiện đang **không được cập nhật** — số liệu cũ có thể không còn đúng."
+        ),
+        "color": 0x2C2F33,  # den xam, phan biet ro voi mau theo muc AQI cua cac tin khac
+    }
+    payload = {
+        "content": (
+            f"@everyone 🚨 Hệ thống theo dõi AQI {city.title()} đang gặp sự cố "
+            f"({consecutive_failures} lần lỗi liên tiếp) — dữ liệu có thể đang cũ."
+        ),
+        "embeds": [embed],
+        "allowed_mentions": {"parse": ["everyone"]},
+    }
+
+    response = requests.post(webhook_url, json=payload, timeout=15)
+    response.raise_for_status()
+
+
 def send_discord_alert(
     webhook_url: str,
     old_aqi: int,
@@ -293,11 +334,25 @@ def main() -> int:
         aqi_value = fetch_current_aqi(CITY, aqicn_token)
     except Exception as exc:
         print(f"Lỗi khi lấy dữ liệu AQICN: {exc}", file=sys.stderr)
+        # Theo dõi lỗi liên tiếp -> cảnh báo Discord nếu lỗi kéo dài, để
+        # người dùng biết hệ thống đang gặp sự cố thay vì im lặng hoàn toàn.
+        try:
+            conn = get_db_connection()
+            failures = record_fetch_failure(conn)
+            if failures >= FAILURE_ALERT_THRESHOLD and not has_sent_failure_alert(conn):
+                print(f"Đã lỗi {failures} lần liên tiếp. Đang gửi cảnh báo sự cố Discord...")
+                send_discord_error_alert(discord_webhook, str(exc), failures, CITY)
+                mark_failure_alert_sent(conn)
+                print("Đã gửi cảnh báo sự cố Discord thành công.")
+            conn.close()
+        except Exception as alert_exc:
+            print(f"Lỗi khi xử lý cảnh báo sự cố: {alert_exc}", file=sys.stderr)
         return 1
 
     new_level = classify_aqi(aqi_value)
 
     conn = get_db_connection()
+    record_fetch_success(conn)  # lấy dữ liệu thành công -> reset bộ đếm lỗi
     last_record = get_last_record(conn)  # None nếu đây là lần chạy đầu tiên
     timestamp = insert_record(conn, aqi_value, new_level)
     conn.close()
