@@ -44,6 +44,23 @@ python check_aqi.py                    # chạy 1 lần: lấy AQI, lưu DB, g�
 streamlit run dashboard.py             # mở dashboard xem lịch sử AQI
 ```
 
+### Chạy dashboard bằng Docker (tuỳ chọn)
+
+Chỉ đóng gói `dashboard.py` (phần xem lịch sử) — **không** đóng gói
+`check_aqi.py`, vì phần đó cố tình vẫn chạy trên GitHub Actions để không cần
+tự quản lý server nào. Đóng gói `check_aqi.py` vào Docker sẽ yêu cầu bạn tự
+có 1 máy luôn bật 24/7 để chạy container, đi ngược lại lợi ích "không cần
+server" hiện có.
+
+```bash
+docker compose up      # build + chạy, mở http://localhost:8501
+docker compose down    # dừng
+```
+
+`db/` được mount dạng volume (không build cứng vào image) — nhớ `git pull`
+trước khi chạy để dashboard đọc đúng dữ liệu mới nhất mà GitHub Actions đã
+commit ngược vào repo.
+
 ## 4. Đưa lên GitHub để chạy tự động (GitHub Actions)
 
 ```bash

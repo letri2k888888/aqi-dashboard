@@ -1,0 +1,15 @@
+# Chạy: docker compose up
+# Mở: http://localhost:8501
+#
+# db/ được mount dạng volume (không build cứng vào image) để dashboard luôn
+# đọc đúng file SQLite mới nhất trên máy — nhớ "git pull" trước khi chạy để
+# lấy dữ liệu mới nhất mà GitHub Actions đã commit ngược vào repo.
+
+services:
+  dashboard:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./db:/app/db
+    restart: unless-stopped
