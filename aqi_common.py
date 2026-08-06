@@ -150,6 +150,12 @@ def get_db_connection() -> sqlite3.Connection:
     conn.execute(
         "INSERT OR IGNORE INTO system_status (id, consecutive_failures, failure_alert_sent) VALUES (1, 0, 0)"
     )
+    # Migration cho DB đã tồn tại từ trước (tạo bằng phiên bản code cũ chưa
+    # có cột này) — ALTER TABLE bị lỗi nếu cột đã có sẵn, bỏ qua lỗi đó.
+    try:
+        conn.execute("ALTER TABLE system_status ADD COLUMN last_report_marker TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     return conn
 
@@ -231,4 +237,19 @@ def has_sent_failure_alert(conn: sqlite3.Connection) -> bool:
 def mark_failure_alert_sent(conn: sqlite3.Connection) -> None:
     """Đánh dấu đã gửi cảnh báo cho đợt lỗi hiện tại."""
     conn.execute("UPDATE system_status SET failure_alert_sent = 1 WHERE id = 1")
+    conn.commit()
+
+
+def get_last_report_marker(conn: sqlite3.Connection) -> str:
+    """Lấy "mã khung giờ" của báo cáo định kỳ gần nhất đã gửi thành công
+    (dạng "YYYY-MM-DD-H", ví dụ "2026-08-06-18") — dùng để chống gửi trùng
+    khi có nhiều lần thử lại trong cùng 1 khung giờ (xem is_report_window_open
+    trong check_aqi.py)."""
+    row = conn.execute("SELECT last_report_marker FROM system_status WHERE id = 1").fetchone()
+    return row[0] if row else ""
+
+
+def set_last_report_marker(conn: sqlite3.Connection, marker: str) -> None:
+    """Ghi lại mã khung giờ vừa gửi báo cáo định kỳ thành công."""
+    conn.execute("UPDATE system_status SET last_report_marker = ? WHERE id = 1", (marker,))
     conn.commit()

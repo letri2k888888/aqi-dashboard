@@ -13,3 +13,4 @@ venv/
 # Lưu ý: db/aqi_history.db CỐ Ý không bị ignore — file này được commit ngược
 # lại vào repo bởi GitHub Actions sau mỗi lần chạy, để giữ lịch sử AQI dù
 # runner của Actions không có state cố định giữa các lần chạy.
+.DS_Store

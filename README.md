@@ -121,7 +121,14 @@ Các bước tự thực hiện (không thể làm thay vì cần đăng nhập 
    - **Body**: `{"ref":"main"}`
    - **Schedule**: mỗi 30 phút (cron-job.org kích hoạt đúng giờ, không bị trễ
      như GitHub free tier).
-4. Lưu ý bảo mật: không chia sẻ token này, và nếu ngừng dùng cron-job.org thì
+4. **Tạo thêm 1 cronjob thứ 2** (cùng URL/Headers/Body như trên), lịch dạng
+   Custom với crontab `5 6,12,18 * * *` (chỉ chạy phút thứ 5 của các giờ
+   6h/12h/18h). Đây là lần "thử lại" cho báo cáo định kỳ — nếu lần chạy đúng
+   giờ (:00) bị bỏ lỡ vì trạm quan trắc tạm thời đứng hình (xem mục "Cơ chế
+   tự giám sát" bên dưới), lần thử lại lúc :05 vẫn còn nằm trong khung 30
+   phút nên có thể gửi thay; code đã tự chống gửi trùng nếu cả 2 lần đều gửi
+   thành công.
+5. Lưu ý bảo mật: không chia sẻ token này, và nếu ngừng dùng cron-job.org thì
    vào lại trang token ở bước 1 để **Revoke**.
 
 Có thể giữ nguyên `schedule:` trong workflow làm phương án dự phòng miễn phí —
@@ -200,6 +207,13 @@ Cả 2 trường hợp đều tăng bộ đếm lỗi liên tiếp (lưu trong b
 của SQLite). Nếu lỗi đủ **3 lần chạy liên tiếp**, gửi 1 tin cảnh báo Discord
 nổi bật (cùng phong cách `@everyone` như tin đổi ngưỡng) — chỉ gửi **1 lần**
 cho mỗi đợt lỗi, tự reset khi lấy được dữ liệu tươi trở lại.
+
+**Ảnh hưởng tới báo cáo định kỳ:** nếu trạm đứng hình đúng lúc 6h/12h/18h,
+báo cáo định kỳ của khung giờ đó cũng bị bỏ qua (vì không có dữ liệu tin cậy
+để báo). Đây là lý do có thêm lịch thử lại lúc phút 05 (xem mục cron-job.org
+ở trên) — nếu trạm đã tươi trở lại vào phút 05, báo cáo vẫn được gửi thay,
+mã hoá theo `system_status.last_report_marker` để không gửi trùng nếu cả 2
+lần đều thành công.
 
 ## Ngưỡng phân loại AQI (chuẩn EPA)
 

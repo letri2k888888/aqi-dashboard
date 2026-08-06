@@ -10,7 +10,11 @@ Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để:
         vì đây là thông tin quan trọng bất kể giờ giấc.
      b. Không đổi ngưỡng, nhưng đang là 1 trong các mốc giờ báo cáo định kỳ
         (6h/12h/18h giờ Việt Nam) -> vẫn báo hiện trạng, để có cập nhật đều
-        đặn trong ngày dù AQI không biến động.
+        đặn trong ngày dù AQI không biến động. Khung giờ này kéo dài 30 phút
+        (phút 0-29) nên nếu lần chạy đầu (đúng giờ) bị bỏ lỡ vì trạm đứng
+        hình, lần chạy phụ 5 phút sau (xem cron-job.org) vẫn còn trong khung
+        và có thể gửi thay — mỗi khung giờ chỉ gửi đúng 1 lần (chống trùng
+        qua system_status.last_report_marker).
      Ngoài 2 trường hợp trên (không đổi ngưỡng và không phải giờ báo cáo) ->
      không gửi gì cả, tránh spam kênh Discord.
   5. [MẶC ĐỊNH TẮT — xem ghi chú bên dưới] Riêng biệt, không ảnh hưởng tới
@@ -62,12 +66,14 @@ from aqi_common import (
     format_vn_time,
     get_db_connection,
     get_last_record,
+    get_last_report_marker,
     get_record_near,
     has_sent_failure_alert,
     insert_record,
     mark_failure_alert_sent,
     record_fetch_failure,
     record_fetch_success,
+    set_last_report_marker,
 )
 
 AQICN_API_URL = "https://api.waqi.info/feed/{city}/?token={token}"
@@ -421,9 +427,22 @@ def main() -> int:
         send_discord_alert(discord_webhook, old_aqi, old_level, aqi_value, new_level, timestamp, CITY, comparison_text, comparison_short)
         print("Đã gửi cảnh báo Discord thành công.")
     elif is_scheduled_report_window():
-        print("Đang trong khung giờ báo cáo định kỳ (6h/12h/18h). Đang gửi báo cáo Discord...")
-        send_discord_status_report(discord_webhook, aqi_value, new_level, timestamp, CITY, comparison_text, comparison_short)
-        print("Đã gửi báo cáo Discord thành công.")
+        # Chống gửi trùng khi có nhiều lần thử lại trong cùng 1 khung giờ (ví
+        # dụ lần chạy đúng giờ bị "trạm đứng hình" nên bỏ lỡ, lần chạy phụ 5
+        # phút sau mới gửi được) — mỗi khung giờ (ngày + giờ) chỉ gửi 1 lần.
+        now_vn = datetime.now(VN_TIMEZONE)
+        report_marker = f"{now_vn.strftime('%Y-%m-%d')}-{now_vn.hour}"
+        conn = get_db_connection()
+        already_sent = get_last_report_marker(conn) == report_marker
+        if already_sent:
+            conn.close()
+            print(f"Đã gửi báo cáo cho khung giờ {report_marker} rồi, bỏ qua (tránh trùng lặp).")
+        else:
+            print("Đang trong khung giờ báo cáo định kỳ (6h/12h/18h). Đang gửi báo cáo Discord...")
+            send_discord_status_report(discord_webhook, aqi_value, new_level, timestamp, CITY, comparison_text, comparison_short)
+            set_last_report_marker(conn, report_marker)
+            conn.close()
+            print("Đã gửi báo cáo Discord thành công.")
     elif last_record is None:
         print("Chưa có dữ liệu trước đó và không phải giờ báo cáo, bỏ qua (lần chạy đầu tiên).")
     else:
