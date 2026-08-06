@@ -6,6 +6,12 @@ Chứa: cấu hình chung, hàm phân loại AQI theo ngưỡng EPA, và các h�
 import os
 import sqlite3
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+# Múi giờ Việt Nam — dữ liệu LƯU trong SQLite luôn ở UTC (thực hành chuẩn,
+# tránh lỗi khi so sánh/tính toán), nhưng HIỂN THỊ cho người dùng thì đổi
+# sang giờ Việt Nam cho dễ đọc (xem format_vn_time bên dưới).
+VN_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 
 # ---------------------------------------------------------------------------
 # Cấu hình
@@ -52,6 +58,15 @@ def classify_aqi(aqi_value: int) -> str:
         if aqi_value >= threshold:
             return level_name
     return "Good"  # fallback, không nên xảy ra vì threshold thấp nhất là 0
+
+
+def format_vn_time(utc_iso_str: str) -> str:
+    """Chuyển timestamp UTC ISO 8601 (định dạng lưu trong SQLite, ví dụ
+    "2026-08-03T03:00:56+00:00") sang chuỗi hiển thị theo GIỜ VIỆT NAM, dễ
+    đọc hơn cho người dùng cuối (ví dụ "2026-08-03 10:00:56")."""
+    dt_utc = datetime.fromisoformat(utc_iso_str)
+    dt_vn = dt_utc.astimezone(VN_TIMEZONE)
+    return dt_vn.strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ---------------------------------------------------------------------------

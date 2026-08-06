@@ -59,6 +59,7 @@ from aqi_common import (
     LEVEL_COLORS,
     classify_aqi,
     forecast_pm_to_aqi,
+    format_vn_time,
     get_db_connection,
     get_last_record,
     get_record_near,
@@ -288,7 +289,7 @@ def send_discord_alert(
         "description": (
             f"**AQI:** {old_aqi} → {new_aqi}\n"
             f"**Ngưỡng:** {old_level} → {new_level}\n"
-            f"**Thời gian:** {timestamp} (UTC)"
+            f"**Thời gian:** {format_vn_time(timestamp)} (giờ VN)"
         ),
         "color": int(LEVEL_COLORS.get(new_level, "#808080").lstrip("#"), 16),
     }
@@ -331,7 +332,7 @@ def send_discord_status_report(
     ngưỡng KHÔNG đổi nhưng vẫn muốn cập nhật định kỳ cho người theo dõi."""
     embed = {
         "title": f"📊 Báo cáo AQI định kỳ — {city.title()}",
-        "description": f"**AQI hiện tại:** {aqi_value}\n**Mức:** {level}\n**Thời gian:** {timestamp} (UTC)",
+        "description": f"**AQI hiện tại:** {aqi_value}\n**Mức:** {level}\n**Thời gian:** {format_vn_time(timestamp)} (giờ VN)",
         "color": int(LEVEL_COLORS.get(level, "#808080").lstrip("#"), 16),
     }
     if comparison_text:

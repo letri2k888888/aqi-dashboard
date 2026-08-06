@@ -17,7 +17,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-from aqi_common import AQI_LEVELS, CITY, DB_PATH, LEVEL_COLORS
+from aqi_common import AQI_LEVELS, CITY, DB_PATH, LEVEL_COLORS, VN_TIMEZONE
 
 st.set_page_config(page_title="Dashboard AQI", page_icon=":material/air:", layout="wide")
 
@@ -34,7 +34,10 @@ def load_history() -> pd.DataFrame:
         df = pd.read_sql_query(
             "SELECT timestamp, aqi_value, level FROM aqi_history ORDER BY id", conn
         )
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # Lưu trong SQLite là UTC (chuẩn) -> đổi sang giờ Việt Nam cho dễ đọc khi
+    # hiển thị. Ảnh hưởng đồng bộ tới cả KPI, biểu đồ và bảng dữ liệu bên dưới
+    # vì tất cả đều đọc chung cột "timestamp" này.
+    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_convert(VN_TIMEZONE)
     return df
 
 
@@ -73,7 +76,7 @@ with st.container(horizontal=True):
             unsafe_allow_html=True,
         )
     with st.container(border=True):
-        st.markdown("**Cập nhật lần cuối (UTC)**")
+        st.markdown("**Cập nhật lần cuối (giờ VN)**")
         st.markdown(f"{latest['timestamp']}")
 
 # --- Biểu đồ lịch sử AQI ------------------------------------------------------
