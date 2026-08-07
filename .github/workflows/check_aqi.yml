@@ -37,6 +37,13 @@ jobs:
         run: python check_aqi.py
 
       - name: Commit lại lịch sử AQI (nếu có thay đổi)
+        # if: always() -> chạy bước này kể cả khi bước "Chạy script kiểm tra
+        # AQI" thất bại (vd. trạm đứng hình). Nếu không có dòng này, mỗi khi
+        # script lỗi thì bộ đếm consecutive_failures (đã tăng trong DB local
+        # của runner) sẽ bị huỷ theo runner mà không bao giờ commit về repo -
+        # khiến lần chạy kế tiếp lại bắt đầu từ 0, làm cảnh báo "lỗi 3 lần
+        # liên tiếp" không bao giờ kích hoạt được dù lỗi kéo dài nhiều giờ.
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
