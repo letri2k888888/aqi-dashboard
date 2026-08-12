@@ -81,6 +81,7 @@ from aqi_common import (
     get_last_report_marker,
     get_record_near,
     has_sent_failure_alert,
+    health_advice_vn,
     insert_record,
     level_vn,
     mark_failure_alert_sent,
@@ -263,21 +264,6 @@ def format_yesterday_comparison(current_aqi: int, yesterday_record) -> str:
     return f"➖ Không đổi (vẫn {current_aqi})"
 
 
-def format_yesterday_delta_short(current_aqi: int, yesterday_record) -> str:
-    """Dạng RÚT GỌN của so sánh hôm qua, dùng trong "content" — phần duy nhất
-    hiện ra trên push notification/lock screen, nên phải ngắn. Trả về chuỗi
-    rỗng nếu không có dữ liệu để so sánh."""
-    if yesterday_record is None:
-        return ""
-    _, yesterday_aqi, _ = yesterday_record
-    delta = current_aqi - yesterday_aqi
-    if delta > 0:
-        return f" - tăng {delta} so với hôm qua"
-    if delta < 0:
-        return f" - giảm {abs(delta)} so với hôm qua"
-    return " - không đổi so với hôm qua"
-
-
 def _change_direction_word(old_aqi: int, new_aqi: int) -> str:
     """Chọn từ nối phù hợp khi mô tả AQI đổi từ mức cũ sang mức mới, dùng
     trong content của send_discord_alert (vd. "... từ Xấu (173) xuống Kém
@@ -344,12 +330,17 @@ def send_discord_alert(
     }
     if comparison_text:
         # Dùng "fields" thay vì nhét vào description -> Discord hiển thị
-        # thành 1 khối riêng có tiêu đề in đậm, dễ quan sát hơn hẳn so với
-        # 1 dòng text lẫn trong đoạn mô tả. Chi tiết AQI cũ->mới đã có ở
-        # "description" phía trên, nên comparison_short KHÔNG lặp lại ở content
-        # nữa để giữ content đúng mẫu ngắn gọn "Chất lượng không khí lên/xuống
-        # mức X (Y)." — chi tiết so hôm qua vẫn xem được khi mở tin nhắn.
+        # thành 1 khối riêng có tiêu đề in đậm, dễ quan sát hơn hẳn so với 1
+        # dòng text lẫn trong đoạn mô tả. Không nhét vào "content" để giữ
+        # content đúng mẫu ngắn gọn "Chất lượng không khí lên/xuống mức X (Y)
+        # — khuyến nghị." — chi tiết so hôm qua vẫn xem được khi mở tin nhắn.
         embed["fields"] = [{"name": "📅 So với cùng giờ hôm qua", "value": comparison_text, "inline": False}]
+
+    # Khuyến nghị ngắn theo mức MỚI (new_level, vì đó là mức người đọc cần
+    # hành động theo) — nối thẳng vào cuối content bằng dấu "—", không tạo
+    # field embed riêng để giữ tin nhắn đơn giản.
+    advice = health_advice_vn(new_level)
+    advice_suffix = f" — {advice}" if advice else ""
 
     # role_id rỗng -> ping @everyone (chưa cấu hình Role cho thành phố này);
     # role_id có giá trị -> chỉ ping đúng Role đó (xem _mention_and_allowed).
@@ -359,8 +350,9 @@ def send_discord_alert(
         # "content", nên phải ngắn gọn — chi tiết AQI cũ->mới đầy đủ nằm
         # trong "embeds".
         "content": (
-            f"{mention} ⚠️ Chất lượng không khí {city_vn(city)} "
-            f"{_change_direction_word(old_aqi, new_aqi)} mức {level_vn(new_level)} ({new_aqi})"
+            f"{mention} ⚠️ Chất lượng không khí {city_vn(city)} từ "
+            f"{level_vn(old_level)} ({old_aqi}) {_change_direction_word(old_aqi, new_aqi)} "
+            f"{level_vn(new_level)} ({new_aqi}){advice_suffix}"
         ),
         "embeds": [embed],
         # Discord mặc định KHÔNG ping thật dù content có chữ @mention, trừ khi
@@ -380,7 +372,6 @@ def send_discord_status_report(
     timestamp: str,
     city: str,
     comparison_text: str = "",
-    comparison_short: str = "",
     role_id: str = "",
 ) -> None:
     """Gửi báo cáo AQI hiện trạng vào mốc giờ cố định (6h/12h/18h), dùng khi
@@ -393,11 +384,15 @@ def send_discord_status_report(
     if comparison_text:
         embed["fields"] = [{"name": "📅 So với cùng giờ hôm qua", "value": comparison_text, "inline": False}]
 
+    # Khuyến nghị ngắn nối thẳng vào cuối content, không tạo field embed riêng.
+    advice = health_advice_vn(level)
+    advice_suffix = f" — {advice}" if advice else ""
+
     mention, allowed_mentions = _mention_and_allowed(role_id)
     payload = {
         "content": (
             f"{mention} 📊 Chất lượng không khí {city_vn(city)} hiện đang ở mức "
-            f"{level_vn(level)} ({aqi_value}){comparison_short}"
+            f"{level_vn(level)} ({aqi_value}){advice_suffix}"
         ),
         "embeds": [embed],
         "allowed_mentions": allowed_mentions,
@@ -470,7 +465,6 @@ def process_city(city_slug: str, city_cfg: dict, aqicn_token: str, discord_webho
     yesterday_record = get_record_near(conn, yesterday_target, city_slug)
     conn.close()
     comparison_text = format_yesterday_comparison(aqi_value, yesterday_record)
-    comparison_short = format_yesterday_delta_short(aqi_value, yesterday_record)
 
     level_changed = last_record is not None and last_record[2] != new_level
 
@@ -496,7 +490,7 @@ def process_city(city_slug: str, city_cfg: dict, aqicn_token: str, discord_webho
         else:
             print(f"[{display_name}] Đang trong khung giờ báo cáo định kỳ (6h/12h/18h). Đang gửi báo cáo Discord...")
             send_discord_status_report(
-                discord_webhook, aqi_value, new_level, timestamp, city_slug, comparison_text, comparison_short, role_id
+                discord_webhook, aqi_value, new_level, timestamp, city_slug, comparison_text, role_id
             )
             set_last_report_marker(conn, city_slug, report_marker)
             conn.close()

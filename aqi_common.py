@@ -70,6 +70,25 @@ def level_vn(level_en: str) -> str:
     return LEVEL_NAMES_VN.get(level_en, level_en)
 
 
+# Khuyến nghị sức khoẻ NGẮN theo từng mức AQI (vài từ, không phải câu đầy
+# đủ) — chèn thẳng vào "content" (phần hiện ngay trên khoá màn hình/push
+# notification) nên phải cực ngắn gọn.
+HEALTH_ADVICE_VN = {
+    "Good": "ra ngoài bình thường",
+    "Moderate": "nhạy cảm hạn chế ra ngoài lâu",
+    "Unhealthy for Sensitive Groups": "nhạy cảm đeo khẩu trang",
+    "Unhealthy": "đeo khẩu trang khi ra ngoài",
+    "Very Unhealthy": "hạn chế ra ngoài, đeo N95",
+    "Hazardous": "ở trong nhà",
+}
+
+
+def health_advice_vn(level_en: str) -> str:
+    """Khuyến nghị sức khoẻ ngắn gọn (tiếng Việt) tương ứng 1 mức AQI. Trả về
+    chuỗi rỗng nếu không khớp key nào (phòng hờ) — nơi gọi tự bỏ qua nếu rỗng."""
+    return HEALTH_ADVICE_VN.get(level_en, "")
+
+
 # Danh sách thành phố được check_aqi.py theo dõi (loop qua từng entry, mỗi
 # thành phố độc lập: dữ liệu, bộ đếm lỗi, và thông báo Discord riêng — xem
 # process_city() trong check_aqi.py). Thêm thành phố mới: thêm 1 entry vào
