@@ -18,7 +18,7 @@ import subprocess
 import pandas as pd
 import streamlit as st
 
-from aqi_common import AQI_LEVELS, CITY, DB_PATH, LEVEL_COLORS, VN_TIMEZONE
+from aqi_common import AQI_LEVELS, CITY, DB_PATH, LEVEL_COLORS, VN_TIMEZONE, get_db_connection
 
 st.set_page_config(page_title="Dashboard AQI", page_icon=":material/air:", layout="wide")
 
@@ -27,15 +27,20 @@ REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @st.cache_data(ttl="60s")
 def load_history() -> pd.DataFrame:
-    """Đọc toàn bộ lịch sử AQI từ SQLite. Cache 60 giây để tránh đọc file liên tục."""
+    """Đọc lịch sử AQI của thành phố CITY từ SQLite. Cache 60 giây để tránh
+    đọc file liên tục. Dùng get_db_connection() (thay vì tự mở kết nối) để
+    luôn chạy qua migration schema mới nhất (vd. cột "city") trước khi đọc —
+    quan trọng vì check_aqi.py giờ theo dõi nhiều thành phố (xem CITIES
+    trong aqi_common.py), lọc theo city để biểu đồ không bị trộn dữ liệu
+    giữa các thành phố khác nhau."""
     if not os.path.exists(DB_PATH):
         return pd.DataFrame(columns=["timestamp", "aqi_value", "level"])
 
-    import sqlite3
-
-    with sqlite3.connect(DB_PATH) as conn:
+    with get_db_connection() as conn:
         df = pd.read_sql_query(
-            "SELECT timestamp, aqi_value, level FROM aqi_history ORDER BY id", conn
+            "SELECT timestamp, aqi_value, level FROM aqi_history WHERE city = ? ORDER BY id",
+            conn,
+            params=(CITY,),
         )
     # Lưu trong SQLite là UTC (chuẩn) -> đổi sang giờ Việt Nam cho dễ đọc khi
     # hiển thị. Ảnh hưởng đồng bộ tới cả KPI, biểu đồ và bảng dữ liệu bên dưới

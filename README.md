@@ -77,11 +77,16 @@ Sau đó vào repo trên GitHub:
 1. **Settings > Secrets and variables > Actions > New repository secret**, thêm:
    - `AQICN_TOKEN` = token lấy ở bước 1
    - `DISCORD_WEBHOOK` = URL webhook ở bước 2
-2. (Tuỳ chọn) Nếu muốn đổi thành phố khác Hà Nội: tạo thêm **Repository variable**
-   tên `AQI_CITY` (ví dụ `ho-chi-minh-city`) trong tab **Variables** cùng trang.
-3. Tin cảnh báo luôn `@everyone` (ping toàn bộ thành viên server, kể cả offline)
-   để Discord đẩy push notification ra màn hình — ai vào server Discord chứa
-   webhook là tự động nhận thông báo, không cần khai báo gì thêm.
+2. Danh sách thành phố `check_aqi.py` theo dõi nằm trong `CITIES` (đầu file
+   `aqi_common.py`), không còn qua biến môi trường nữa. Muốn theo dõi thêm
+   thành phố (và để mỗi người tự chọn thành phố mình quan tâm trên Discord
+   thay vì bị ping cho mọi thành phố) — xem mục "Theo dõi nhiều thành phố"
+   bên dưới. Biến `AQI_CITY` (Repository variable, tuỳ chọn) giờ chỉ còn ảnh
+   hưởng tới `dashboard.py` — chọn thành phố nào hiển thị trên biểu đồ.
+3. Mặc định (chưa cấu hình Role riêng cho thành phố nào) tin cảnh báo vẫn
+   dùng `@everyone` (ping toàn bộ thành viên server, kể cả offline) để Discord
+   đẩy push notification ra màn hình — ai vào server Discord chứa webhook là
+   tự động nhận thông báo, không cần khai báo gì thêm.
 4. Workflow `.github/workflows/check_aqi.yml` sẽ tự chạy mỗi 30 phút (cron UTC),
    kể cả khi máy cá nhân tắt. Có thể bấm chạy thử ngay qua tab **Actions >
    Kiểm tra AQI định kỳ > Run workflow**.
@@ -203,17 +208,59 @@ hiện sự cố, đều xử lý qua chung 1 luồng cảnh báo:
    `check_aqi.py`). Trường hợp này KHÔNG được lưu vào SQLite và KHÔNG chạy
    logic thông báo, tránh làm sai lệch tính năng so sánh hôm qua.
 
-Cả 2 trường hợp đều tăng bộ đếm lỗi liên tiếp (lưu trong bảng `system_status`
-của SQLite). Nếu lỗi đủ **3 lần chạy liên tiếp**, gửi 1 tin cảnh báo Discord
-nổi bật (cùng phong cách `@everyone` như tin đổi ngưỡng) — chỉ gửi **1 lần**
-cho mỗi đợt lỗi, tự reset khi lấy được dữ liệu tươi trở lại.
+Cả 2 trường hợp đều tăng bộ đếm lỗi liên tiếp **của riêng thành phố đó** (lưu
+trong bảng `system_status_by_city` của SQLite). Nếu lỗi đủ **3 lần chạy liên
+tiếp**, gửi 1 tin cảnh báo Discord nổi bật (cùng phong cách mention như tin
+đổi ngưỡng — xem mục "Theo dõi nhiều thành phố" bên dưới) — chỉ gửi **1 lần**
+cho mỗi đợt lỗi, tự reset khi lấy được dữ liệu tươi trở lại. 1 thành phố lỗi
+không ảnh hưởng tới việc kiểm tra các thành phố khác trong cùng lần chạy.
 
 **Ảnh hưởng tới báo cáo định kỳ:** nếu trạm đứng hình đúng lúc 6h/12h/18h,
 báo cáo định kỳ của khung giờ đó cũng bị bỏ qua (vì không có dữ liệu tin cậy
 để báo). Đây là lý do có thêm lịch thử lại lúc phút 05 (xem mục cron-job.org
 ở trên) — nếu trạm đã tươi trở lại vào phút 05, báo cáo vẫn được gửi thay,
-mã hoá theo `system_status.last_report_marker` để không gửi trùng nếu cả 2
-lần đều thành công.
+mã hoá theo `system_status_by_city.last_report_marker` (riêng từng thành phố)
+để không gửi trùng nếu cả 2 lần đều thành công.
+
+## Theo dõi nhiều thành phố (mỗi người tự chọn thành phố của mình)
+
+Hệ thống hỗ trợ theo dõi **nhiều thành phố cùng lúc** trong 1 lần chạy, và chỉ
+ping đúng những người đã chọn thành phố tương ứng trên Discord — thay vì
+`@everyone` gửi cho tất cả mọi người dù họ không quan tâm thành phố đó.
+
+**Cách hoạt động:** danh sách thành phố khai báo trong `CITIES` (đầu file
+`aqi_common.py`). Mỗi lần chạy, `check_aqi.py` lặp qua từng thành phố trong
+đó, xử lý hoàn toàn độc lập (dữ liệu, bộ đếm lỗi, thông báo riêng — 1 thành
+phố lỗi không chặn thành phố khác). Khi gửi Discord, thay vì `@everyone`, tin
+nhắn sẽ `@mention` đúng **Discord Role** của thành phố đó — chỉ ai có role ấy
+mới bị ping.
+
+**Việc "chọn thành phố" của người dùng dùng tính năng có sẵn của Discord**
+(Role tự chọn qua Onboarding), **không cần bot** hay code gì thêm:
+
+1. **Bật chế độ Community cho server** (nếu chưa bật): Server Settings →
+   Overview → cuộn xuống **Enable Community** → làm theo hướng dẫn (cần ít
+   nhất 1 kênh Rules và 1 kênh thông báo cộng đồng, Discord tự tạo sẵn).
+2. **Tạo 1 Role cho mỗi thành phố**: Server Settings → Roles → **Create Role**
+   → đặt tên trùng thành phố (ví dụ `AQI - Hà Nội`) → không cần bật quyền
+   (permission) đặc biệt nào, role này chỉ dùng để mention.
+3. **Lấy Role ID**: bật Developer Mode trước (User Settings → Advanced →
+   Developer Mode), sau đó vào Server Settings → Roles → chuột phải vào role
+   vừa tạo → **Copy Role ID**. Dán ID này vào `role_id` của thành phố tương
+   ứng trong `CITIES` (`aqi_common.py`), commit lại.
+4. **Cho phép tự chọn role qua Onboarding**: Server Settings → Onboarding →
+   mục **Channels & Roles** → bật cho phép chọn các role thành phố vừa tạo.
+   Thành viên mới (hoặc thành viên cũ vào lại mục này qua tên server → **Edit
+   Onboarding** ở một số phiên bản Discord) sẽ thấy màn hình tự chọn role,
+   không cần gõ lệnh hay thao tác gì phức tạp.
+
+**Thêm thành phố mới:** chỉ cần thêm 1 entry vào `CITIES` (aqicn slug tra tại
+`https://aqicn.org/city/<ten-thanh-pho>`, tên hiển thị tiếng Việt, và role_id
+sau khi tạo role) — không cần sửa code, không cần thêm webhook hay secret mới
+(vẫn dùng chung 1 kênh, 1 `DISCORD_WEBHOOK` như hiện tại).
+
+**Nếu chưa kịp tạo Role:** để `role_id: ""` — hệ thống tự dùng `@everyone` cho
+thành phố đó như hành vi gốc, không lỗi, không cần cấu hình gì thêm trước.
 
 ## Ngưỡng phân loại AQI (chuẩn EPA)
 

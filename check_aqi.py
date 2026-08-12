@@ -1,8 +1,11 @@
 """
 check_aqi.py
 ------------
-Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để:
-  1. Lấy dữ liệu AQI hiện tại từ AQICN API cho thành phố cấu hình sẵn.
+Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để, LẶP LẠI CHO
+TỪNG THÀNH PHỐ khai báo trong CITIES (aqi_common.py) — mỗi thành phố độc lập
+hoàn toàn (dữ liệu, bộ đếm lỗi, thông báo riêng), 1 thành phố lỗi không chặn
+các thành phố khác chạy tiếp (xem process_city()):
+  1. Lấy dữ liệu AQI hiện tại từ AQICN API cho thành phố đó.
   2. Phân loại AQI theo ngưỡng EPA.
   3. Lưu kết quả vào SQLite (bảng aqi_history).
   4. Gửi thông báo Discord trong 2 trường hợp (ưu tiên theo thứ tự):
@@ -14,7 +17,7 @@ Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để:
         (phút 0-29) nên nếu lần chạy đầu (đúng giờ) bị bỏ lỡ vì trạm đứng
         hình, lần chạy phụ 5 phút sau (xem cron-job.org) vẫn còn trong khung
         và có thể gửi thay — mỗi khung giờ chỉ gửi đúng 1 lần (chống trùng
-        qua system_status.last_report_marker).
+        qua system_status_by_city.last_report_marker).
      Ngoài 2 trường hợp trên (không đổi ngưỡng và không phải giờ báo cáo) ->
      không gửi gì cả, tránh spam kênh Discord.
   5. [MẶC ĐỊNH TẮT — xem ghi chú bên dưới] Riêng biệt, không ảnh hưởng tới
@@ -24,11 +27,16 @@ Script chạy định kỳ (qua GitHub Actions cron, mỗi 30 phút) để:
   6. Mỗi tin cảnh báo/báo cáo (bước 4) đều kèm thêm 1 dòng so sánh AQI với
      cùng giờ hôm qua (nếu có đủ dữ liệu), giúp người đọc thấy ngay xu hướng
      tốt lên hay xấu đi mà không cần tự tra cứu.
-  7. Nếu gọi AQICN API thất bại 3 lần chạy LIÊN TIẾP trở lên, gửi 1 tin cảnh
-     báo sự cố hệ thống (định dạng nổi bật, @everyone, giống bước 4) — chỉ
-     gửi 1 lần cho mỗi đợt lỗi (không lặp lại mỗi 30 phút), tự reset khi lấy
-     dữ liệu thành công trở lại. Vá lỗ hổng "im lặng khi hỏng": trước đây lỗi
-     chỉ ghi log, không ai biết trừ khi tự vào xem GitHub Actions.
+  7. Nếu gọi AQICN API thất bại 3 lần chạy LIÊN TIẾP trở lên (của CÙNG 1
+     thành phố), gửi 1 tin cảnh báo sự cố hệ thống (định dạng nổi bật, giống
+     bước 4) — chỉ gửi 1 lần cho mỗi đợt lỗi (không lặp lại mỗi 30 phút), tự
+     reset khi lấy dữ liệu thành công trở lại. Vá lỗ hổng "im lặng khi hỏng":
+     trước đây lỗi chỉ ghi log, không ai biết trừ khi tự vào xem GitHub Actions.
+  8. Mỗi tin nhắn Discord (bước 4 và 7) @mention đúng Discord Role của thành
+     phố đó (CITIES[...]["role_id"]) thay vì @everyone, để chỉ những người đã
+     tự chọn thành phố này (qua Discord Onboarding/role tự chọn) mới bị ping —
+     xem README phần "Theo dõi nhiều thành phố". Nếu role_id chưa được cấu
+     hình (còn để trống ""), tự động dùng @everyone như hành vi gốc, không lỗi.
 
 GHI CHÚ QUAN TRỌNG về tính năng dự báo (bước 5): đã kiểm chứng thực tế và
 phát hiện `forecast.daily` của AQICN KHÔNG khớp với số đo thật của trạm đang
@@ -44,8 +52,11 @@ Biến môi trường bắt buộc:
   - AQICN_TOKEN     : API token lấy tại https://aqicn.org/data-platform/token/
   - DISCORD_WEBHOOK : URL webhook của kênh Discord muốn nhận cảnh báo
 
+Danh sách thành phố theo dõi khai báo trong CITIES (aqi_common.py), KHÔNG
+còn dùng biến môi trường AQI_CITY để chọn thành phố nữa (biến này chỉ còn
+được dashboard.py dùng để chọn thành phố hiển thị trên biểu đồ).
+
 Biến môi trường tuỳ chọn:
-  - AQI_CITY          : tên thành phố/trạm AQICN, mặc định "hanoi"
   - FORECAST_ENABLED  : "true" để bật lại tin dự báo 21h, mặc định "false"
                         (tắt) do dữ liệu forecast không đáng tin cậy — xem
                         ghi chú ở trên.
@@ -59,8 +70,9 @@ from zoneinfo import ZoneInfo
 import requests
 
 from aqi_common import (
-    CITY,
+    CITIES,
     LEVEL_COLORS,
+    city_vn,
     classify_aqi,
     forecast_pm_to_aqi,
     format_vn_time,
@@ -70,6 +82,7 @@ from aqi_common import (
     get_record_near,
     has_sent_failure_alert,
     insert_record,
+    level_vn,
     mark_failure_alert_sent,
     record_fetch_failure,
     record_fetch_success,
@@ -195,25 +208,39 @@ def fetch_tomorrow_forecast_aqi(city: str, token: str):
     return forecast_pm_to_aqi(pm25_avg, pm10_avg)
 
 
-def send_discord_forecast(webhook_url: str, forecast_aqi: int, forecast_level: str, city: str) -> None:
+def _mention_and_allowed(role_id: str) -> tuple[str, dict]:
+    """Chọn chuỗi @mention và "allowed_mentions" tương ứng cho 1 thành phố.
+
+    Nếu role_id đã cấu hình (CITIES[...]["role_id"]) -> ping đúng Role đó, chỉ
+    những người đã tự chọn thành phố này (qua Discord Onboarding) mới bị ping.
+    Nếu role_id còn để trống (chưa tạo Role trên Discord) -> tự rơi về
+    @everyone, giữ nguyên hành vi gốc để hệ thống vẫn hoạt động bình thường
+    trong lúc chờ cấu hình Role."""
+    if role_id:
+        return f"<@&{role_id}>", {"roles": [role_id]}
+    return "@everyone", {"parse": ["everyone"]}
+
+
+def send_discord_forecast(webhook_url: str, forecast_aqi: int, forecast_level: str, city: str, role_id: str = "") -> None:
     """Gửi tin dự báo AQI ngày mai vào lúc 21h — độc lập với send_discord_alert
     và send_discord_status_report, không tái sử dụng hay sửa 2 hàm đó."""
     embed = {
-        "title": f"🔮 Dự báo AQI ngày mai — {city.title()}",
+        "title": f"🔮 Dự báo AQI ngày mai — {city_vn(city)}",
         "description": (
             f"**AQI dự kiến (trung bình cả ngày):** {forecast_aqi}\n"
-            f"**Mức dự kiến:** {forecast_level}\n"
+            f"**Mức dự kiến:** {level_vn(forecast_level)}\n"
             "⚠️ Đây là **giá trị trung bình** ước tính từ dự báo PM2.5/PM10 của AQICN — "
             "mức cao nhất thực tế trong ngày có thể vượt con số này."
         ),
         "color": int(LEVEL_COLORS.get(forecast_level, "#808080").lstrip("#"), 16),
     }
+    mention, allowed_mentions = _mention_and_allowed(role_id)
     payload = {
         "content": (
-            f"@everyone 🔮 Dự báo AQI {city.title()} ngày mai (TB): {forecast_level} ({forecast_aqi})"
+            f"{mention} 🔮 Dự báo AQI {city_vn(city)} ngày mai (TB): {level_vn(forecast_level)} ({forecast_aqi})"
         ),
         "embeds": [embed],
-        "allowed_mentions": {"parse": ["everyone"]},
+        "allowed_mentions": allowed_mentions,
     }
 
     response = requests.post(webhook_url, json=payload, timeout=15)
@@ -245,19 +272,34 @@ def format_yesterday_delta_short(current_aqi: int, yesterday_record) -> str:
     _, yesterday_aqi, _ = yesterday_record
     delta = current_aqi - yesterday_aqi
     if delta > 0:
-        return f" (▲{delta} so hôm qua)"
+        return f" - tăng {delta} so với hôm qua"
     if delta < 0:
-        return f" (▼{abs(delta)} so hôm qua)"
-    return " (= hôm qua)"
+        return f" - giảm {abs(delta)} so với hôm qua"
+    return " - không đổi so với hôm qua"
 
 
-def send_discord_error_alert(webhook_url: str, error_message: str, consecutive_failures: int, city: str) -> None:
-    """Gửi cảnh báo khi hệ thống lấy dữ liệu AQICN thất bại LIÊN TIẾP nhiều
-    lần. Cố tình dùng cùng phong cách nổi bật với send_discord_alert
-    (@everyone, embed riêng) để người dùng chú ý ngay — đây là tin quan
-    trọng: có thể đang không nhận được cảnh báo AQI thật nào trong lúc lỗi."""
+def _change_direction_word(old_aqi: int, new_aqi: int) -> str:
+    """Chọn từ nối phù hợp khi mô tả AQI đổi từ mức cũ sang mức mới, dùng
+    trong content của send_discord_alert (vd. "... từ Xấu (173) xuống Kém
+    (120)")."""
+    if new_aqi > old_aqi:
+        return "lên"
+    if new_aqi < old_aqi:
+        return "xuống"
+    return "sang"
+
+
+def send_discord_error_alert(
+    webhook_url: str, error_message: str, consecutive_failures: int, city: str, role_id: str = ""
+) -> None:
+    """Gửi cảnh báo khi hệ thống lấy dữ liệu AQICN của 1 thành phố thất bại
+    LIÊN TIẾP nhiều lần. Cố tình dùng cùng phong cách nổi bật với
+    send_discord_alert (mention, embed riêng) để người dùng chú ý ngay — đây
+    là tin quan trọng: có thể đang không nhận được cảnh báo AQI thật nào
+    trong lúc lỗi. Chỉ ping đúng Role của thành phố đang lỗi, không ảnh hưởng
+    người theo dõi thành phố khác."""
     embed = {
-        "title": f"🚨 Hệ thống theo dõi AQI gặp sự cố — {city.title()}",
+        "title": f"🚨 Hệ thống theo dõi AQI gặp sự cố — {city_vn(city)}",
         "description": (
             f"Không lấy được dữ liệu AQI trong **{consecutive_failures} lần chạy liên tiếp**.\n"
             f"**Lỗi gần nhất:** {error_message}\n"
@@ -265,13 +307,14 @@ def send_discord_error_alert(webhook_url: str, error_message: str, consecutive_f
         ),
         "color": 0x2C2F33,  # den xam, phan biet ro voi mau theo muc AQI cua cac tin khac
     }
+    mention, allowed_mentions = _mention_and_allowed(role_id)
     payload = {
         "content": (
-            f"@everyone 🚨 Hệ thống theo dõi AQI {city.title()} đang gặp sự cố "
+            f"{mention} 🚨 Hệ thống theo dõi AQI {city_vn(city)} đang gặp sự cố "
             f"({consecutive_failures} lần lỗi liên tiếp) — dữ liệu có thể đang cũ."
         ),
         "embeds": [embed],
-        "allowed_mentions": {"parse": ["everyone"]},
+        "allowed_mentions": allowed_mentions,
     }
 
     response = requests.post(webhook_url, json=payload, timeout=15)
@@ -287,14 +330,14 @@ def send_discord_alert(
     timestamp: str,
     city: str,
     comparison_text: str = "",
-    comparison_short: str = "",
+    role_id: str = "",
 ) -> None:
     """Gửi thông báo đổi ngưỡng AQI vào kênh Discord thông qua Webhook."""
     embed = {
-        "title": f"⚠️ Cảnh báo thay đổi mức AQI — {city.title()}",
+        "title": f"⚠️ Cảnh báo thay đổi mức AQI — {city_vn(city)}",
         "description": (
             f"**AQI:** {old_aqi} → {new_aqi}\n"
-            f"**Ngưỡng:** {old_level} → {new_level}\n"
+            f"**Mức:** {level_vn(old_level)} → {level_vn(new_level)}\n"
             f"**Thời gian:** {format_vn_time(timestamp)} (giờ VN)"
         ),
         "color": int(LEVEL_COLORS.get(new_level, "#808080").lstrip("#"), 16),
@@ -302,23 +345,28 @@ def send_discord_alert(
     if comparison_text:
         # Dùng "fields" thay vì nhét vào description -> Discord hiển thị
         # thành 1 khối riêng có tiêu đề in đậm, dễ quan sát hơn hẳn so với
-        # 1 dòng text lẫn trong đoạn mô tả.
+        # 1 dòng text lẫn trong đoạn mô tả. Chi tiết AQI cũ->mới đã có ở
+        # "description" phía trên, nên comparison_short KHÔNG lặp lại ở content
+        # nữa để giữ content đúng mẫu ngắn gọn "Chất lượng không khí lên/xuống
+        # mức X (Y)." — chi tiết so hôm qua vẫn xem được khi mở tin nhắn.
         embed["fields"] = [{"name": "📅 So với cùng giờ hôm qua", "value": comparison_text, "inline": False}]
 
+    # role_id rỗng -> ping @everyone (chưa cấu hình Role cho thành phố này);
+    # role_id có giá trị -> chỉ ping đúng Role đó (xem _mention_and_allowed).
+    mention, allowed_mentions = _mention_and_allowed(role_id)
     payload = {
-        # @everyone -> mọi thành viên server đều bị ping (kể cả offline), nên
-        # ai vào server là tự động nhận thông báo, không cần khai báo User ID.
-        # Push notification trên điện thoại chỉ hiện được nội dung của "content",
-        # KHÔNG hiện nội dung bên trong "embeds" -> phải nhét luôn thông tin tóm
-        # tắt (AQI cũ->mới, ngưỡng cũ->mới, và cả so sánh hôm qua) vào đây.
+        # Push notification trên điện thoại chỉ hiện được nội dung của
+        # "content", nên phải ngắn gọn — chi tiết AQI cũ->mới đầy đủ nằm
+        # trong "embeds".
         "content": (
-            f"@everyone ⚠️ AQI {city.title()} đổi mức: "
-            f"{old_level} ({old_aqi}) → {new_level} ({new_aqi}){comparison_short}"
+            f"{mention} ⚠️ Chất lượng không khí {city_vn(city)} "
+            f"{_change_direction_word(old_aqi, new_aqi)} mức {level_vn(new_level)} ({new_aqi})"
         ),
         "embeds": [embed],
-        # Discord mặc định KHÔNG ping thật dù content có chữ "@everyone", trừ
-        # khi "parse" khai báo rõ -> bắt buộc phải có dòng này thì ping mới hoạt động.
-        "allowed_mentions": {"parse": ["everyone"]},
+        # Discord mặc định KHÔNG ping thật dù content có chữ @mention, trừ khi
+        # "allowed_mentions" khai báo rõ -> bắt buộc phải có dòng này thì ping
+        # mới hoạt động.
+        "allowed_mentions": allowed_mentions,
     }
 
     response = requests.post(webhook_url, json=payload, timeout=15)
@@ -333,43 +381,153 @@ def send_discord_status_report(
     city: str,
     comparison_text: str = "",
     comparison_short: str = "",
+    role_id: str = "",
 ) -> None:
     """Gửi báo cáo AQI hiện trạng vào mốc giờ cố định (6h/12h/18h), dùng khi
     ngưỡng KHÔNG đổi nhưng vẫn muốn cập nhật định kỳ cho người theo dõi."""
     embed = {
-        "title": f"📊 Báo cáo AQI định kỳ — {city.title()}",
-        "description": f"**AQI hiện tại:** {aqi_value}\n**Mức:** {level}\n**Thời gian:** {format_vn_time(timestamp)} (giờ VN)",
+        "title": f"📊 Báo cáo AQI định kỳ — {city_vn(city)}",
+        "description": f"**AQI hiện tại:** {aqi_value}\n**Mức:** {level_vn(level)}\n**Thời gian:** {format_vn_time(timestamp)} (giờ VN)",
         "color": int(LEVEL_COLORS.get(level, "#808080").lstrip("#"), 16),
     }
     if comparison_text:
         embed["fields"] = [{"name": "📅 So với cùng giờ hôm qua", "value": comparison_text, "inline": False}]
 
+    mention, allowed_mentions = _mention_and_allowed(role_id)
     payload = {
-        "content": f"@everyone 📊 Báo cáo AQI {city.title()}: hiện đang ở mức {level} ({aqi_value}){comparison_short}",
+        "content": (
+            f"{mention} 📊 Chất lượng không khí {city_vn(city)} hiện đang ở mức "
+            f"{level_vn(level)} ({aqi_value}){comparison_short}"
+        ),
         "embeds": [embed],
-        "allowed_mentions": {"parse": ["everyone"]},
+        "allowed_mentions": allowed_mentions,
     }
 
     response = requests.post(webhook_url, json=payload, timeout=15)
     response.raise_for_status()
 
 
-def _handle_fetch_problem(discord_webhook: str, error_message: str) -> None:
-    """Dùng chung cho 2 trường hợp coi như "không lấy được dữ liệu tin cậy":
-    API lỗi hẳn, hoặc trạm đứng hình (API trả ok nhưng số liệu cũ). Tăng bộ
-    đếm lỗi liên tiếp trong system_status, gửi cảnh báo Discord nếu đạt
-    ngưỡng FAILURE_ALERT_THRESHOLD và chưa gửi cho đợt lỗi hiện tại."""
+def _handle_fetch_problem(discord_webhook: str, error_message: str, city_slug: str, role_id: str) -> None:
+    """Dùng chung cho 2 trường hợp coi như "không lấy được dữ liệu tin cậy"
+    CỦA 1 THÀNH PHỐ: API lỗi hẳn, hoặc trạm đứng hình (API trả ok nhưng số
+    liệu cũ). Tăng bộ đếm lỗi liên tiếp của thành phố đó trong
+    system_status_by_city, gửi cảnh báo Discord (ping đúng Role thành phố)
+    nếu đạt ngưỡng FAILURE_ALERT_THRESHOLD và chưa gửi cho đợt lỗi hiện tại."""
     try:
         conn = get_db_connection()
-        failures = record_fetch_failure(conn)
-        if failures >= FAILURE_ALERT_THRESHOLD and not has_sent_failure_alert(conn):
-            print(f"Đã lỗi {failures} lần liên tiếp. Đang gửi cảnh báo sự cố Discord...")
-            send_discord_error_alert(discord_webhook, error_message, failures, CITY)
-            mark_failure_alert_sent(conn)
-            print("Đã gửi cảnh báo sự cố Discord thành công.")
+        failures = record_fetch_failure(conn, city_slug)
+        if failures >= FAILURE_ALERT_THRESHOLD and not has_sent_failure_alert(conn, city_slug):
+            print(f"[{city_slug}] Đã lỗi {failures} lần liên tiếp. Đang gửi cảnh báo sự cố Discord...")
+            send_discord_error_alert(discord_webhook, error_message, failures, city_slug, role_id)
+            mark_failure_alert_sent(conn, city_slug)
+            print(f"[{city_slug}] Đã gửi cảnh báo sự cố Discord thành công.")
         conn.close()
     except Exception as alert_exc:
-        print(f"Lỗi khi xử lý cảnh báo sự cố: {alert_exc}", file=sys.stderr)
+        print(f"[{city_slug}] Lỗi khi xử lý cảnh báo sự cố: {alert_exc}", file=sys.stderr)
+
+
+def process_city(city_slug: str, city_cfg: dict, aqicn_token: str, discord_webhook: str) -> bool:
+    """Chạy toàn bộ quy trình kiểm tra + thông báo AQI cho 1 thành phố trong
+    CITIES. Trả về True nếu chạy thành công (kể cả khi không có gì để gửi),
+    False nếu gặp lỗi/dữ liệu trạm cũ — dùng để main() quyết định exit code,
+    KHÔNG dùng để chặn các thành phố khác (mỗi thành phố luôn được xử lý độc
+    lập, xem vòng lặp trong main())."""
+    aqicn_slug = city_cfg["aqicn_slug"]
+    display_name = city_cfg["display_name"]
+    role_id = city_cfg.get("role_id") or ""
+
+    try:
+        aqi_value, station_time_iso = fetch_current_aqi(aqicn_slug, aqicn_token)
+    except Exception as exc:
+        print(f"[{display_name}] Lỗi khi lấy dữ liệu AQICN: {exc}", file=sys.stderr)
+        _handle_fetch_problem(discord_webhook, str(exc), city_slug, role_id)
+        return False
+
+    if is_station_data_stale(station_time_iso):
+        # API trả status=ok (không phải lỗi HTTP) nhưng số liệu trạm đã cũ —
+        # xử lý giống hệt 1 lần thất bại, KHÔNG lưu vào lịch sử và KHÔNG chạy
+        # tiếp logic thông báo, để tránh nhét số liệu cũ vào SQLite làm sai
+        # lệch tính năng "so với hôm qua" hoặc gửi cảnh báo dựa trên số cũ.
+        stale_msg = f"Trạm không cập nhật dữ liệu mới (lần đo gần nhất: {station_time_iso})"
+        print(f"[{display_name}] Cảnh báo: {stale_msg}", file=sys.stderr)
+        _handle_fetch_problem(discord_webhook, stale_msg, city_slug, role_id)
+        return False
+
+    new_level = classify_aqi(aqi_value)
+
+    conn = get_db_connection()
+    record_fetch_success(conn, city_slug)  # lấy dữ liệu thành công -> reset bộ đếm lỗi
+    last_record = get_last_record(conn, city_slug)  # None nếu đây là lần chạy đầu tiên của thành phố này
+    timestamp = insert_record(conn, aqi_value, new_level, city_slug)
+    conn.close()
+
+    print(f"[{timestamp}] {display_name}: AQI={aqi_value} -> level={new_level}")
+
+    # So sánh với cùng giờ hôm qua (không ảnh hưởng logic ưu tiên bên dưới,
+    # chỉ tạo thêm 1 dòng mô tả để nhét vào nội dung tin nhắn nếu có gửi).
+    yesterday_target = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds")
+    conn = get_db_connection()
+    yesterday_record = get_record_near(conn, yesterday_target, city_slug)
+    conn.close()
+    comparison_text = format_yesterday_comparison(aqi_value, yesterday_record)
+    comparison_short = format_yesterday_delta_short(aqi_value, yesterday_record)
+
+    level_changed = last_record is not None and last_record[2] != new_level
+
+    if level_changed:
+        _, old_aqi, old_level = last_record
+        print(f"[{display_name}] Ngưỡng thay đổi: {old_level} -> {new_level}. Đang gửi cảnh báo Discord...")
+        send_discord_alert(
+            discord_webhook, old_aqi, old_level, aqi_value, new_level, timestamp, city_slug, comparison_text, role_id
+        )
+        print(f"[{display_name}] Đã gửi cảnh báo Discord thành công.")
+    elif is_scheduled_report_window():
+        # Chống gửi trùng khi có nhiều lần thử lại trong cùng 1 khung giờ (ví
+        # dụ lần chạy đúng giờ bị "trạm đứng hình" nên bỏ lỡ, lần chạy phụ 5
+        # phút sau mới gửi được) — mỗi khung giờ (ngày + giờ) chỉ gửi 1 lần,
+        # riêng cho từng thành phố.
+        now_vn = datetime.now(VN_TIMEZONE)
+        report_marker = f"{now_vn.strftime('%Y-%m-%d')}-{now_vn.hour}"
+        conn = get_db_connection()
+        already_sent = get_last_report_marker(conn, city_slug) == report_marker
+        if already_sent:
+            conn.close()
+            print(f"[{display_name}] Đã gửi báo cáo cho khung giờ {report_marker} rồi, bỏ qua (tránh trùng lặp).")
+        else:
+            print(f"[{display_name}] Đang trong khung giờ báo cáo định kỳ (6h/12h/18h). Đang gửi báo cáo Discord...")
+            send_discord_status_report(
+                discord_webhook, aqi_value, new_level, timestamp, city_slug, comparison_text, comparison_short, role_id
+            )
+            set_last_report_marker(conn, city_slug, report_marker)
+            conn.close()
+            print(f"[{display_name}] Đã gửi báo cáo Discord thành công.")
+    elif last_record is None:
+        print(f"[{display_name}] Chưa có dữ liệu trước đó và không phải giờ báo cáo, bỏ qua (lần chạy đầu tiên).")
+    else:
+        print(f"[{display_name}] Ngưỡng không đổi ({new_level}) và không phải giờ báo cáo, không gửi thông báo.")
+
+    # --- Dự báo AQI ngày mai (21h) -----------------------------------------
+    # Khối này HOÀN TOÀN ĐỘC LẬP với logic phía trên (đổi ngưỡng / báo cáo
+    # định kỳ) — không đọc, không ghi đè bất kỳ biến nào ở trên, chỉ thêm 1
+    # tin nhắn riêng khi đúng khung giờ 21h, không làm thay đổi hành vi gốc.
+    # MẶC ĐỊNH TẮT (FORECAST_ENABLED=false) vì dữ liệu forecast của AQICN
+    # không khớp với số đo thật của trạm — xem ghi chú đầu file.
+    if FORECAST_ENABLED and is_forecast_window():
+        try:
+            forecast_aqi = fetch_tomorrow_forecast_aqi(aqicn_slug, aqicn_token)
+        except Exception as exc:
+            print(f"[{display_name}] Lỗi khi lấy dự báo AQICN: {exc}", file=sys.stderr)
+            forecast_aqi = None
+
+        if forecast_aqi is not None:
+            forecast_level = classify_aqi(forecast_aqi)
+            print(f"[{display_name}] Dự báo ngày mai: AQI={forecast_aqi} -> level={forecast_level}. Đang gửi Discord...")
+            send_discord_forecast(discord_webhook, forecast_aqi, forecast_level, city_slug, role_id)
+            print(f"[{display_name}] Đã gửi dự báo Discord thành công.")
+        else:
+            print(f"[{display_name}] Trạm không có dữ liệu dự báo cho ngày mai, bỏ qua.")
+
+    return True
 
 
 def main() -> int:
@@ -383,93 +541,17 @@ def main() -> int:
         print("Lỗi: thiếu biến môi trường DISCORD_WEBHOOK", file=sys.stderr)
         return 1
 
-    try:
-        aqi_value, station_time_iso = fetch_current_aqi(CITY, aqicn_token)
-    except Exception as exc:
-        print(f"Lỗi khi lấy dữ liệu AQICN: {exc}", file=sys.stderr)
-        _handle_fetch_problem(discord_webhook, str(exc))
-        return 1
+    # Mỗi thành phố trong CITIES được xử lý độc lập — 1 thành phố lỗi (API
+    # lỗi, trạm đứng hình) không chặn các thành phố còn lại chạy tiếp. Exit
+    # code cuối cùng chỉ phản ánh "có ít nhất 1 thành phố lỗi hay không", để
+    # GitHub Actions hiển thị đúng trạng thái run, không quyết định việc commit
+    # DB (bước đó luôn chạy nhờ if: always() trong workflow).
+    all_ok = True
+    for city_slug, city_cfg in CITIES.items():
+        ok = process_city(city_slug, city_cfg, aqicn_token, discord_webhook)
+        all_ok = all_ok and ok
 
-    if is_station_data_stale(station_time_iso):
-        # API trả status=ok (không phải lỗi HTTP) nhưng số liệu trạm đã cũ —
-        # xử lý giống hệt 1 lần thất bại, KHÔNG lưu vào lịch sử và KHÔNG chạy
-        # tiếp logic thông báo, để tránh nhét số liệu cũ vào SQLite làm sai
-        # lệch tính năng "so với hôm qua" hoặc gửi cảnh báo dựa trên số cũ.
-        stale_msg = f"Trạm không cập nhật dữ liệu mới (lần đo gần nhất: {station_time_iso})"
-        print(f"Cảnh báo: {stale_msg}", file=sys.stderr)
-        _handle_fetch_problem(discord_webhook, stale_msg)
-        return 1
-
-    new_level = classify_aqi(aqi_value)
-
-    conn = get_db_connection()
-    record_fetch_success(conn)  # lấy dữ liệu thành công -> reset bộ đếm lỗi
-    last_record = get_last_record(conn)  # None nếu đây là lần chạy đầu tiên
-    timestamp = insert_record(conn, aqi_value, new_level)
-    conn.close()
-
-    print(f"[{timestamp}] {CITY}: AQI={aqi_value} -> level={new_level}")
-
-    # So sánh với cùng giờ hôm qua (không ảnh hưởng logic ưu tiên bên dưới,
-    # chỉ tạo thêm 1 dòng mô tả để nhét vào nội dung tin nhắn nếu có gửi).
-    yesterday_target = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(timespec="seconds")
-    conn = get_db_connection()
-    yesterday_record = get_record_near(conn, yesterday_target)
-    conn.close()
-    comparison_text = format_yesterday_comparison(aqi_value, yesterday_record)
-    comparison_short = format_yesterday_delta_short(aqi_value, yesterday_record)
-
-    level_changed = last_record is not None and last_record[2] != new_level
-
-    if level_changed:
-        _, old_aqi, old_level = last_record
-        print(f"Ngưỡng thay đổi: {old_level} -> {new_level}. Đang gửi cảnh báo Discord...")
-        send_discord_alert(discord_webhook, old_aqi, old_level, aqi_value, new_level, timestamp, CITY, comparison_text, comparison_short)
-        print("Đã gửi cảnh báo Discord thành công.")
-    elif is_scheduled_report_window():
-        # Chống gửi trùng khi có nhiều lần thử lại trong cùng 1 khung giờ (ví
-        # dụ lần chạy đúng giờ bị "trạm đứng hình" nên bỏ lỡ, lần chạy phụ 5
-        # phút sau mới gửi được) — mỗi khung giờ (ngày + giờ) chỉ gửi 1 lần.
-        now_vn = datetime.now(VN_TIMEZONE)
-        report_marker = f"{now_vn.strftime('%Y-%m-%d')}-{now_vn.hour}"
-        conn = get_db_connection()
-        already_sent = get_last_report_marker(conn) == report_marker
-        if already_sent:
-            conn.close()
-            print(f"Đã gửi báo cáo cho khung giờ {report_marker} rồi, bỏ qua (tránh trùng lặp).")
-        else:
-            print("Đang trong khung giờ báo cáo định kỳ (6h/12h/18h). Đang gửi báo cáo Discord...")
-            send_discord_status_report(discord_webhook, aqi_value, new_level, timestamp, CITY, comparison_text, comparison_short)
-            set_last_report_marker(conn, report_marker)
-            conn.close()
-            print("Đã gửi báo cáo Discord thành công.")
-    elif last_record is None:
-        print("Chưa có dữ liệu trước đó và không phải giờ báo cáo, bỏ qua (lần chạy đầu tiên).")
-    else:
-        print(f"Ngưỡng không đổi ({new_level}) và không phải giờ báo cáo, không gửi thông báo.")
-
-    # --- Dự báo AQI ngày mai (21h) -----------------------------------------
-    # Khối này HOÀN TOÀN ĐỘC LẬP với logic phía trên (đổi ngưỡng / báo cáo
-    # định kỳ) — không đọc, không ghi đè bất kỳ biến nào ở trên, chỉ thêm 1
-    # tin nhắn riêng khi đúng khung giờ 21h, không làm thay đổi hành vi gốc.
-    # MẶC ĐỊNH TẮT (FORECAST_ENABLED=false) vì dữ liệu forecast của AQICN
-    # không khớp với số đo thật của trạm — xem ghi chú đầu file.
-    if FORECAST_ENABLED and is_forecast_window():
-        try:
-            forecast_aqi = fetch_tomorrow_forecast_aqi(CITY, aqicn_token)
-        except Exception as exc:
-            print(f"Lỗi khi lấy dự báo AQICN: {exc}", file=sys.stderr)
-            forecast_aqi = None
-
-        if forecast_aqi is not None:
-            forecast_level = classify_aqi(forecast_aqi)
-            print(f"Dự báo ngày mai: AQI={forecast_aqi} -> level={forecast_level}. Đang gửi Discord...")
-            send_discord_forecast(discord_webhook, forecast_aqi, forecast_level, CITY)
-            print("Đã gửi dự báo Discord thành công.")
-        else:
-            print("Trạm không có dữ liệu dự báo cho ngày mai, bỏ qua.")
-
-    return 0
+    return 0 if all_ok else 1
 
 
 if __name__ == "__main__":
